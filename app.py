@@ -12,6 +12,10 @@ from fpdf import FPDF
 import markdown
 from bs4 import BeautifulSoup
 import re
+from docx import Document
+from docx.shared import Inches
+from docx.enum.style import WD_STYLE_TYPE
+import io
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -54,75 +58,118 @@ Return valid JSON with these fields:
   "business_model_signals": [],
   "scale_indicators": [],
   "ai_mentions": [],
-  "technical_complexity_signals": []
+  "technical_complexity_signals": [],
+  "architecture_keywords": [],
+  "data_flow_indicators": [],
+  "scaling_evidence": []
 }
 
 NO interpretation. NO analysis. ONLY data extraction.""",
             
-            "diagnose": """You are a senior systems architect diagnosing AI readiness.
+            "diagnose": """You are a systems architect performing a reality check on AI ambitions.
 
-Determine:
-1. What the company THINKS it is building vs what it ACTUALLY is building
-2. Hidden technical bottlenecks they haven't considered
-3. Specific failure modes in their current approach
-4. AI maturity classification: Opportunistic | Experimental | Scaling | Native
+REQUIRED OUTPUT STRUCTURE:
 
-Be opinionated. Identify blind spots. Focus on mechanisms, not descriptions.
-Avoid buzzwords: leverage, unlock, synergy, transformation.
+**What They Think They're Building:**
+[Extract their self-perception from job posts, marketing language, and stated goals]
 
-Output 3-4 paragraphs of sharp diagnostic insight.""",
+**What They're Actually Building:**
+[Based on technical signals - stack, architecture, hiring patterns]
+
+**The Gap:**
+[Specific contradictions between perception and technical reality]
+
+**Hidden Bottlenecks:**
+- Data architecture constraints they haven't considered
+- Technical debt that will block AI implementation
+- Operational complexity they're underestimating
+- Team capability gaps relative to AI ambitions
+
+**Scaling Failure Points:**
+[Specific technical chokepoints that will break at 10x scale]
+
+**AI System Classification:**
+- AI-Washed: Marketing AI but building traditional systems
+- AI-Assisted: Adding AI features to existing products  
+- AI-Native: Core product requires AI to function
+- Non-AI: Traditional software with no AI dependency
+
+**Classification Reasoning:**
+[Justify classification with specific evidence]
+
+NO BUZZWORDS. Be surgically precise about technical realities.""",
             
-            "generate_hook": """You are writing a 5-8 line outbound message to a founder.
+            "generate_hook": """You are writing a direct, founder-to-founder message that exposes a tension.
 
-Requirements:
-- Must contain a tension point or insight they haven't considered
-- Founder-facing (not HR or recruiters)
-- Specific to their situation
-- No generic AI statements
-- Must create curiosity without being salesy
+REQUIREMENTS:
+- 3-5 sentences maximum
+- Identify one contradiction between what they claim and what they're actually building
+- Frame as genuine curiosity, not accusation
+- Reference specific technical signals from their hiring/stack
+- End with a simple, non-sales question
 
-Format as a LinkedIn message or email.""",
+TONE: Technical peer, not consultant. Direct but respectful.
+
+AVOID:
+- Any buzzwords (leverage, unlock, transform, scale, optimize)
+- Generic AI statements
+- Sales language
+- Multiple topics
+
+FORMULA:
+1. Observe their stated direction
+2. Note technical contradiction 
+3. Express curiosity about the gap
+4. Simple question
+
+Example style: "Noticed you're hiring for X and talking about Y, but your stack suggests Z. Curious how you're thinking about that gap - is there something I'm missing about the architecture?"
+""",
             
-            "generate_audit": """Generate a comprehensive AI Readiness Audit in markdown format.
+            "generate_audit": """Generate a mechanism-driven AI Readiness Audit. Focus on what will break, not what sounds good.
 
-Structure:
 # AI Readiness Audit
 
 ## Executive Summary
-Brief overview and readiness score (1-10)
+- Current AI Classification: [AI-Washed/AI-Assisted/AI-Native/Non-AI]
+- Reality Check Score: X/10 (gap between claims and capability)
+- Primary Constraint: [The one thing that will break first]
 
-## Current State Analysis
-What they're building and how
+## System Reality
+What they actually built vs what they claim to be building.
 
-## Readiness Scores
-- Data Infrastructure: X/10
-- Technical Architecture: X/10  
-- Team Capabilities: X/10
-- Product-Market Fit: X/10
-- AI Integration Maturity: X/10
+## Constraint Analysis
+**Data Architecture:** [Specific data flow bottlenecks]
+**Compute Infrastructure:** [Actual processing limitations]  
+**Team Capabilities:** [Skills gaps that will cause failures]
+**Technical Debt:** [Legacy constraints blocking AI implementation]
+**Operational Maturity:** [Process gaps at scale]
 
-## Opportunity Map
-Specific areas where AI can add value
+## Failure Mode Predictions
+The top 3 ways their AI ambitions will fail, with specific technical triggers.
 
-## Critical Bottlenecks
-Technical and organizational constraints
+## Contrarian Insights
+**What everyone else is telling them:** [Common advice they're getting]
+**What's actually true:** [Uncomfortable reality they need to face]
+**The bet they're really making:** [What has to be true for them to succeed]
 
-## Recommendations
-Prioritized action items with timeframes
+## Mechanism-Based Recommendations
+Specific technical interventions, not strategic advice:
+- [Concrete system changes with clear outcomes]
+- [Process modifications with measurable effects]
+- [Architecture decisions with failure prevention]
 
-## Next Steps
-Concrete 30/60/90 day plan
-
-Be specific. Include actual technical recommendations, not generic advice.""",
+NO BUZZWORDS. NO "BEST PRACTICES." Focus on what breaks systems and how to prevent it.""",
             
-            "generate_close": """Write a brief consultative close (2-3 paragraphs).
+            "generate_close": """Write 2-3 sentences that surface one uncomfortable truth about their approach.
 
-Include:
-- Short reflection on their situation
-- One thoughtful question about their approach
-- Optional soft call-to-action (not pushy)
+Requirements:
+- Reference a specific technical tension from the analysis
+- No questions, no CTAs, no next steps
+- End with a direct statement about what they're actually building vs what they think they're building
 
-Keep it conversational and consultative."""
+Avoid: consulting language, encouragement, positivity, solutions
+
+Style: Technical peer delivering honest feedback"""
         }
     
     def _load_prompts(self) -> Dict[str, str]:
@@ -293,10 +340,7 @@ Audit Summary: {audit[:500]}..."""
 
 class PDFGenerator:
     def __init__(self):
-        self.pdf = FPDF()
-        self.pdf.add_page()
-        # Use Times font which has better Unicode support
-        self.pdf.set_font('Times', 'B', 16)
+        pass
     
     def _clean_text(self, text: str) -> str:
         """Remove markdown and clean text for PDF"""
@@ -315,18 +359,67 @@ class PDFGenerator:
         cleaned = ''.join(char if ord(char) < 128 else '?' for char in cleaned)
         return cleaned.strip()
     
-    def generate_pdf(self, results: PipelineResults, company_name: str) -> bytes:
-        """Generate PDF report"""
+    def _add_content_to_pdf(self, pdf: FPDF, title: str, content: str, company_name: str = None):
+        """Add content section to PDF"""
         # Header
-        self.pdf.cell(0, 10, 'IDPETECH - BA Assistant AI Readiness Audit', ln=True, align='C')
-        self.pdf.set_font('Times', '', 10)
-        self.pdf.cell(0, 10, f'Generated on: {datetime.now().strftime("%Y-%m-%d %H:%M")}', ln=True, align='C')
-        self.pdf.ln(5)
+        pdf.set_font('Times', 'B', 16)
+        pdf.cell(0, 10, f'IDPETECH - BA Assistant: {title}', ln=True, align='C')
+        pdf.set_font('Times', '', 10)
+        pdf.cell(0, 10, f'Generated on: {datetime.now().strftime("%Y-%m-%d %H:%M")}', ln=True, align='C')
+        pdf.ln(5)
+        
+        # Company name if provided
+        if company_name:
+            pdf.set_font('Times', 'B', 14)
+            pdf.cell(0, 10, f'Company: {company_name}', ln=True)
+            pdf.ln(5)
+        
+        # Content
+        pdf.set_font('Times', '', 10)
+        cleaned_content = self._clean_text(content)
+        
+        # Split long text into lines
+        lines = cleaned_content.split('\n')
+        for line in lines:
+            if len(line) > 80:
+                # Wrap long lines
+                words = line.split(' ')
+                current_line = ""
+                for word in words:
+                    if len(current_line + word) < 80:
+                        current_line += word + " "
+                    else:
+                        if current_line:
+                            pdf.cell(0, 5, current_line.strip(), ln=True)
+                        current_line = word + " "
+                if current_line:
+                    pdf.cell(0, 5, current_line.strip(), ln=True)
+            else:
+                pdf.cell(0, 5, line, ln=True)
+    
+    def generate_section_pdf(self, title: str, content: str, company_name: str = None) -> bytes:
+        """Generate PDF for individual section"""
+        pdf = FPDF()
+        pdf.add_page()
+        self._add_content_to_pdf(pdf, title, content, company_name)
+        return bytes(pdf.output())
+    
+    def generate_pdf(self, results: PipelineResults, company_name: str) -> bytes:
+        """Generate complete PDF report"""
+        pdf = FPDF()
+        pdf.add_page()
+        
+        # Header for complete report
+        pdf.set_font('Times', 'B', 16)
+        pdf.cell(0, 10, 'IDPETECH - BA Assistant: Complete AI Readiness Report', ln=True, align='C')
+        pdf.set_font('Times', '', 10)
+        pdf.cell(0, 10, f'Generated on: {datetime.now().strftime("%Y-%m-%d %H:%M")}', ln=True, align='C')
+        pdf.ln(5)
         
         # Company name
-        self.pdf.set_font('Times', 'B', 14)
-        self.pdf.cell(0, 10, f'Company: {company_name}', ln=True)
-        self.pdf.ln(5)
+        pdf.set_font('Times', 'B', 14)
+        pdf.cell(0, 10, f'Company: {company_name}', ln=True)
+        pdf.ln(5)
         
         sections = [
             ("First Engagement Hook", results.hook),
@@ -336,11 +429,11 @@ class PDFGenerator:
         ]
         
         for title, content in sections:
-            self.pdf.set_font('Times', 'B', 12)
-            self.pdf.cell(0, 10, title, ln=True)
-            self.pdf.ln(2)
+            pdf.set_font('Times', 'B', 12)
+            pdf.cell(0, 10, title, ln=True)
+            pdf.ln(2)
             
-            self.pdf.set_font('Times', '', 10)
+            pdf.set_font('Times', '', 10)
             cleaned_content = self._clean_text(content)
             
             # Split long text into lines
@@ -355,15 +448,120 @@ class PDFGenerator:
                             current_line += word + " "
                         else:
                             if current_line:
-                                self.pdf.cell(0, 5, current_line.strip(), ln=True)
+                                pdf.cell(0, 5, current_line.strip(), ln=True)
                             current_line = word + " "
                     if current_line:
-                        self.pdf.cell(0, 5, current_line.strip(), ln=True)
+                        pdf.cell(0, 5, current_line.strip(), ln=True)
                 else:
-                    self.pdf.cell(0, 5, line, ln=True)
-            self.pdf.ln(5)
+                    pdf.cell(0, 5, line, ln=True)
+            pdf.ln(5)
         
-        return bytes(self.pdf.output())
+        return bytes(pdf.output())
+
+class WordGenerator:
+    def __init__(self):
+        pass
+    
+    def _clean_text_for_word(self, text: str) -> str:
+        """Clean and prepare text for Word document"""
+        # Convert markdown to plain text while preserving structure
+        html = markdown.markdown(text)
+        soup = BeautifulSoup(html, 'html.parser')
+        cleaned = soup.get_text()
+        
+        # Clean up spacing
+        cleaned = re.sub(r'\n\s*\n', '\n\n', cleaned)
+        return cleaned.strip()
+    
+    def _add_markdown_content(self, doc: Document, content: str):
+        """Add markdown content to Word document with proper formatting"""
+        lines = content.split('\n')
+        i = 0
+        
+        while i < len(lines):
+            line = lines[i].strip()
+            
+            if not line:
+                i += 1
+                continue
+                
+            # Handle headers
+            if line.startswith('# '):
+                heading = doc.add_heading(line[2:], level=1)
+            elif line.startswith('## '):
+                heading = doc.add_heading(line[3:], level=2)
+            elif line.startswith('### '):
+                heading = doc.add_heading(line[4:], level=3)
+            elif line.startswith('**') and line.endswith('**'):
+                # Bold text
+                p = doc.add_paragraph()
+                run = p.add_run(line[2:-2])
+                run.bold = True
+            elif line.startswith('- '):
+                # Bullet point
+                doc.add_paragraph(line[2:], style='List Bullet')
+            else:
+                # Regular paragraph
+                doc.add_paragraph(line)
+            
+            i += 1
+    
+    def generate_section_word(self, title: str, content: str, company_name: str = None) -> bytes:
+        """Generate Word document for individual section"""
+        doc = Document()
+        
+        # Add header
+        header_p = doc.add_heading(f'IDPETECH - BA Assistant: {title}', level=1)
+        
+        # Add metadata
+        meta_p = doc.add_paragraph()
+        meta_p.add_run(f'Generated on: {datetime.now().strftime("%Y-%m-%d %H:%M")}\n').italic = True
+        if company_name:
+            meta_p.add_run(f'Company: {company_name}').italic = True
+        
+        doc.add_paragraph()  # Space
+        
+        # Add content
+        self._add_markdown_content(doc, content)
+        
+        # Save to bytes
+        buffer = io.BytesIO()
+        doc.save(buffer)
+        buffer.seek(0)
+        return buffer.getvalue()
+    
+    def generate_word(self, results: PipelineResults, company_name: str) -> bytes:
+        """Generate complete Word document report"""
+        doc = Document()
+        
+        # Add title
+        title = doc.add_heading('IDPETECH - BA Assistant: Complete AI Readiness Report', level=1)
+        
+        # Add metadata
+        meta_p = doc.add_paragraph()
+        meta_p.add_run(f'Generated on: {datetime.now().strftime("%Y-%m-%d %H:%M")}\n').italic = True
+        meta_p.add_run(f'Company: {company_name}').italic = True
+        
+        doc.add_page_break()
+        
+        sections = [
+            ("First Engagement Hook", results.hook),
+            ("Diagnostic Insight", results.diagnosis),
+            ("AI Readiness Audit", results.audit),
+            ("Conversation Close", results.close)
+        ]
+        
+        for title, content in sections:
+            doc.add_heading(title, level=2)
+            doc.add_paragraph()  # Space
+            self._add_markdown_content(doc, content)
+            doc.add_page_break()
+        
+        # Save to bytes
+        buffer = io.BytesIO()
+        doc.save(buffer)
+        buffer.seek(0)
+        return buffer.getvalue()
 
 def main():
     st.set_page_config(
@@ -502,32 +700,98 @@ def main():
         
         if st.session_state.results:
             results = st.session_state.results
+            company_name = results.signals.get('company_name', 'Unknown Company')
+            pdf_generator = PDFGenerator()
+            word_generator = WordGenerator()
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M')
             
-            # Hook - Highlighted box
+            # Helper function for individual downloads
+            def create_download_buttons(section_title: str, content: str, file_prefix: str):
+                col_md, col_pdf, col_word = st.columns(3)
+                
+                with col_md:
+                    # Individual Markdown download
+                    markdown_content = f"""# {section_title}
+Generated on: {datetime.now().strftime("%Y-%m-%d %H:%M")}
+Company: {company_name}
+
+{content}
+"""
+                    st.download_button(
+                        label="📄 MD",
+                        data=markdown_content,
+                        file_name=f"{file_prefix}_{timestamp}.md",
+                        mime="text/markdown",
+                        key=f"md_{file_prefix}"
+                    )
+                
+                with col_pdf:
+                    # Individual PDF download
+                    try:
+                        pdf_bytes = pdf_generator.generate_section_pdf(section_title, content, company_name)
+                        st.download_button(
+                            label="📄 PDF",
+                            data=pdf_bytes,
+                            file_name=f"{file_prefix}_{timestamp}.pdf",
+                            mime="application/pdf",
+                            key=f"pdf_{file_prefix}"
+                        )
+                    except Exception as e:
+                        st.error(f"PDF generation failed: {str(e)}")
+                
+                with col_word:
+                    # Individual Word download
+                    try:
+                        word_bytes = word_generator.generate_section_word(section_title, content, company_name)
+                        st.download_button(
+                            label="📄 DOCX",
+                            data=word_bytes,
+                            file_name=f"{file_prefix}_{timestamp}.docx",
+                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                            key=f"word_{file_prefix}"
+                        )
+                    except Exception as e:
+                        st.error(f"Word generation failed: {str(e)}")
+            
+            # Hook Section
             st.subheader("🎯 First Engagement Hook")
             st.info(results.hook)
+            create_download_buttons("First Engagement Hook", results.hook, "hook")
             
-            # Diagnostic - Expandable
-            with st.expander("🔍 Diagnostic Insight", expanded=True):
-                st.write(results.diagnosis)
+            st.divider()
             
-            # Audit - Main content
+            # Diagnostic Section
+            st.subheader("🔍 Diagnostic Insight")
+            st.markdown(results.diagnosis)
+            create_download_buttons("Diagnostic Insight", results.diagnosis, "diagnosis")
+            
+            st.divider()
+            
+            # Audit Section
             st.subheader("📋 AI Readiness Audit")
             st.markdown(results.audit)
+            create_download_buttons("AI Readiness Audit", results.audit, "audit")
             
-            # Close section
+            st.divider()
+            
+            # Close Section
             st.subheader("🤝 Conversation Close")
             st.write(results.close)
+            create_download_buttons("Conversation Close", results.close, "close")
             
-            # Download options
-            st.subheader("💾 Export Options")
+            st.divider()
             
-            col_md, col_pdf = st.columns(2)
+            # Complete Report Download Options
+            st.subheader("💾 Complete Report")
+            st.caption("Download all sections as a single file")
+            
+            col_md, col_pdf, col_word = st.columns(3)
             
             with col_md:
-                # Markdown download
-                markdown_content = f"""# AI Readiness Audit Report
+                # Complete Markdown download
+                complete_markdown = f"""# AI Readiness Audit Report
 Generated on: {datetime.now().strftime("%Y-%m-%d %H:%M")}
+Company: {company_name}
 
 ## First Engagement Hook
 {results.hook}
@@ -542,26 +806,40 @@ Generated on: {datetime.now().strftime("%Y-%m-%d %H:%M")}
 {results.close}
 """
                 st.download_button(
-                    label="📄 Download as Markdown",
-                    data=markdown_content,
-                    file_name=f"ai_readiness_audit_{datetime.now().strftime('%Y%m%d_%H%M')}.md",
-                    mime="text/markdown"
+                    label="📄 Complete Report (MD)",
+                    data=complete_markdown,
+                    file_name=f"complete_ai_readiness_report_{timestamp}.md",
+                    mime="text/markdown",
+                    key="complete_md"
                 )
             
             with col_pdf:
-                # PDF download
+                # Complete PDF download
                 try:
-                    company_name = results.signals.get('company_name', 'Unknown Company')
-                    pdf_generator = PDFGenerator()
                     pdf_bytes = pdf_generator.generate_pdf(results, company_name)
                     st.download_button(
-                        label="📄 Download as PDF",
+                        label="📄 Complete Report (PDF)",
                         data=pdf_bytes,
-                        file_name=f"ai_readiness_audit_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
-                        mime="application/pdf"
+                        file_name=f"complete_ai_readiness_report_{timestamp}.pdf",
+                        mime="application/pdf",
+                        key="complete_pdf"
                     )
                 except Exception as e:
-                    st.error(f"PDF generation failed: {str(e)}")
+                    st.error(f"Complete PDF generation failed: {str(e)}")
+            
+            with col_word:
+                # Complete Word download
+                try:
+                    word_bytes = word_generator.generate_word(results, company_name)
+                    st.download_button(
+                        label="📄 Complete Report (DOCX)",
+                        data=word_bytes,
+                        file_name=f"complete_ai_readiness_report_{timestamp}.docx",
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        key="complete_word"
+                    )
+                except Exception as e:
+                    st.error(f"Complete Word generation failed: {str(e)}")
         else:
             st.info("👈 Enter company information and click 'Generate' to see the AI readiness analysis.")
 
