@@ -711,6 +711,13 @@ class BAAssistant:
         return {
             "extract_signals": """You are a signal extraction engine. Extract ONLY structured data from company inputs.
 
+COMPANY NAME EXTRACTION RULES:
+- From LinkedIn URLs: Extract company name from "linkedin.com/company/[name]" or "linkedin.com/in/[name]"
+- From Website/Company text: Extract the primary company name mentioned
+- From Job Postings: Look for "at [Company]", "[Company] is hiring", company signatures
+- If multiple names found, prioritize the most formal/complete version
+- Clean up: Remove "Inc", "LLC", "Ltd" unless part of brand (e.g. "OpenAI, Inc." → "OpenAI")
+
 Return valid JSON with these fields:
 {
   "company_name": "",
@@ -729,7 +736,7 @@ Return valid JSON with these fields:
   "scaling_evidence": []
 }
 
-NO interpretation. NO analysis. ONLY data extraction.""",
+NO interpretation. NO analysis. ONLY data extraction. Focus on accurate company_name extraction.""",
             
             "diagnose": """You are a systems architect performing a reality check on AI ambitions.
 
@@ -886,23 +893,115 @@ Style: Technical peer delivering honest feedback"""
                     raise e
                 time.sleep(2 ** attempt)
     
+    def _extract_company_from_linkedin(self, linkedin_input: str) -> str:
+        """Helper to extract company name from LinkedIn URL patterns"""
+        import re
+        
+        if not linkedin_input:
+            return ""
+        
+        # Known company name mappings for proper capitalization
+        known_companies = {
+            'openai': 'OpenAI',
+            'anthropic': 'Anthropic', 
+            'anthropic-ai': 'Anthropic',
+            'meta': 'Meta',
+            'meta-ai': 'Meta AI',
+            'google': 'Google',
+            'microsoft': 'Microsoft',
+            'amazon': 'Amazon',
+            'apple': 'Apple',
+            'netflix': 'Netflix',
+            'uber': 'Uber',
+            'airbnb': 'Airbnb',
+            'salesforce': 'Salesforce',
+            'shopify': 'Shopify',
+            'stripe': 'Stripe',
+            'figma': 'Figma',
+            'notion': 'Notion',
+            'slack': 'Slack',
+            'zoom': 'Zoom',
+            'tesla': 'Tesla',
+            'spacex': 'SpaceX',
+            'nvidia': 'NVIDIA',
+            'amd': 'AMD',
+            'intel': 'Intel',
+            'ibm': 'IBM'
+        }
+            
+        # Pattern 1: linkedin.com/company/company-name
+        company_match = re.search(r'linkedin\.com/company/([^/?]+)', linkedin_input, re.IGNORECASE)
+        if company_match:
+            company_slug = company_match.group(1).lower()
+            
+            # Check for exact known company match first
+            if company_slug in known_companies:
+                return known_companies[company_slug]
+            
+            # Convert slug to readable name with smart capitalization
+            name = company_slug.replace('-', ' ').replace('_', ' ')
+            
+            # Handle special cases for AI, API, etc.
+            words = []
+            for word in name.split():
+                if word.lower() in ['ai', 'api', 'ui', 'ux', 'ceo', 'cto', 'cfo']:
+                    words.append(word.upper())
+                elif word.lower() in ['inc', 'llc', 'ltd', 'corp']:
+                    words.append(word.capitalize())
+                else:
+                    words.append(word.capitalize())
+            
+            return ' '.join(words)
+        
+        # Pattern 2: linkedin.com/in/person-name (less reliable but try)
+        person_match = re.search(r'linkedin\.com/in/([^/?]+)', linkedin_input, re.IGNORECASE)
+        if person_match:
+            # This is a person profile, not a company - return empty to let LLM handle it
+            return ""
+            
+        # Pattern 3: Just company name provided as text
+        if not linkedin_input.startswith('http') and len(linkedin_input.strip()) < 100:
+            return linkedin_input.strip()
+            
+        return ""
+    
     def extract_signals(self, inputs: CompanyInputs) -> Dict[str, Any]:
         """Stage 1: Extract structured signals without interpretation"""
         system_prompt = self.prompts["extract_signals"]
-
+        
+        # Pre-extract company name from LinkedIn if possible
+        suggested_company = self._extract_company_from_linkedin(inputs.linkedin_url)
+        
         user_prompt = f"""Extract signals from:
 
 LinkedIn/Company: {inputs.linkedin_url}
 Website/Summary: {inputs.website}
-Job Posting: {inputs.job_posting}"""
+Job Posting: {inputs.job_posting}
+
+{f"HINT: Detected company name from LinkedIn URL: '{suggested_company}'" if suggested_company else ""}
+
+Focus especially on extracting the correct company_name field."""
 
         response = self._make_llm_call(system_prompt, user_prompt)
         logger.info(f"Signals extracted: {response[:200]}...")
         
         try:
-            return json.loads(response)
+            signals = json.loads(response)
+            
+            # Fallback: If LLM didn't extract company name but we detected one from LinkedIn
+            if not signals.get('company_name') and suggested_company:
+                signals['company_name'] = suggested_company
+                logger.info(f"Applied fallback company name: {suggested_company}")
+            
+            return signals
         except json.JSONDecodeError:
-            return {"error": "Failed to parse signals", "raw_response": response}
+            # Even on JSON error, try to return basic structure with detected company
+            fallback_signals = {
+                "company_name": suggested_company or "Unknown Company",
+                "error": "Failed to parse signals", 
+                "raw_response": response
+            }
+            return fallback_signals
     
     def diagnose(self, signals: Dict[str, Any], inputs: CompanyInputs) -> str:
         """Stage 2: Strategic diagnostic reasoning"""
@@ -1083,20 +1182,28 @@ def main():
     with col1:
         st.header("📋 Company Inputs")
         
+        # Load input data if a company was loaded from memory
+        default_linkedin = st.session_state.get('loaded_linkedin_url', '')
+        default_website = st.session_state.get('loaded_website', '')
+        default_job_posting = st.session_state.get('loaded_job_posting', '')
+        
         linkedin_url = st.text_area(
             "LinkedIn URL or Company Description",
+            value=default_linkedin,
             placeholder="Enter LinkedIn company URL or describe the company...",
             height=100
         )
         
         website = st.text_area(
-            "Website or Company Summary", 
+            "Website or Company Summary",
+            value=default_website,
             placeholder="Enter website URL or company summary...",
             height=100
         )
         
         job_posting = st.text_area(
             "Job Posting Text",
+            value=default_job_posting,
             placeholder="Paste the job posting content...",
             height=150
         )
@@ -1110,6 +1217,17 @@ def main():
                 with st.spinner("Running production advisory pipeline..."):
                     try:
                         inputs = CompanyInputs(linkedin_url, website, job_posting)
+                        
+                        # Clear any previously loaded company state for fresh analysis
+                        if 'loaded_company' in st.session_state:
+                            del st.session_state.loaded_company
+                        if 'loaded_linkedin_url' in st.session_state:
+                            del st.session_state.loaded_linkedin_url
+                        if 'loaded_website' in st.session_state:
+                            del st.session_state.loaded_website  
+                        if 'loaded_job_posting' in st.session_state:
+                            del st.session_state.loaded_job_posting
+                        
                         st.session_state.results = st.session_state.ba_assistant.run_full_pipeline(inputs)
                         st.success("Analysis complete with pattern detection!")
                     except Exception as e:
@@ -1142,7 +1260,14 @@ def main():
                                         # Reconstruct PipelineResults from stored data
                                         st.session_state.results = st.session_state.ba_assistant._reconstruct_pipeline_results(full_company_data)
                                         st.session_state.loaded_company = company['company_name']
-                                        st.success(f"Loaded {company['company_name']}")
+                                        
+                                        # Load the input data into session state for form population
+                                        raw_inputs = full_company_data['raw_inputs']
+                                        st.session_state.loaded_linkedin_url = raw_inputs['linkedin_url']
+                                        st.session_state.loaded_website = raw_inputs['website'] 
+                                        st.session_state.loaded_job_posting = raw_inputs['job_posting']
+                                        
+                                        st.success(f"Loaded {company['company_name']} with full state")
                                         st.rerun()
                                     else:
                                         st.error("Failed to load company data")
@@ -1221,11 +1346,17 @@ def main():
             st.info("💡 **Tip:** Edit prompts above, click 'Update Assistant', then 'Save as Defaults' to make your changes permanent for future sessions.")
     
     with col2:
-        st.header("📊 Analysis Results")
-        
         if st.session_state.results:
             results = st.session_state.results
-            company_name = results.signals.get('company_name', 'Unknown Company')
+            # Use loaded company name if available, otherwise get from signals
+            if 'loaded_company' in st.session_state and st.session_state.loaded_company:
+                company_name = st.session_state.loaded_company
+            else:
+                company_name = results.signals.get('company_name', 'Unknown Company')
+            
+            # Display header with company name
+            st.header(f"📊 Analysis Results - {company_name}")
+            
             pdf_generator = PDFGenerator()
             word_generator = WordGenerator()
             timestamp = datetime.now().strftime('%Y%m%d_%H%M')
