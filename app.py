@@ -6,8 +6,11 @@ import logging
 import time
 import os
 from datetime import datetime
-from typing import Dict, Any, Optional
-from dataclasses import dataclass
+from typing import Dict, Any, Optional, Tuple
+from dataclasses import dataclass, field
+from urllib.parse import urlparse
+import requests
+import html2text
 from fpdf import FPDF
 import markdown
 from bs4 import BeautifulSoup
@@ -21,11 +24,83 @@ import io
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+_SCRAPE_TIMEOUT = 12          # seconds per request
+_SCRAPE_MAX_CHARS = 40_000    # ~10k tokens; keeps LLM context manageable
+
+def _is_url(text: str) -> bool:
+    """Return True if text looks like an http/https URL."""
+    try:
+        p = urlparse(text.strip())
+        return p.scheme in ("http", "https") and bool(p.netloc)
+    except Exception:
+        return False
+
+
+def scrape_website(url: str) -> Tuple[bool, str]:
+    """
+    Fetch a URL and convert its page to clean Markdown.
+
+    Returns (success, content).  On failure, content is a human-readable
+    error message rather than a traceback.
+    """
+    try:
+        headers = {"User-Agent": "Mozilla/5.0 (compatible; BAAssistant/1.0; +https://idpetech.com)"}
+        resp = requests.get(url.strip(), headers=headers, timeout=_SCRAPE_TIMEOUT)
+        resp.raise_for_status()
+
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        # Drop elements that add noise without useful content
+        for tag in soup(["script", "style", "nav", "footer", "aside", "form",
+                          "iframe", "noscript", "header"]):
+            tag.decompose()
+
+        # Prefer a focused content region when the page marks one
+        body = (
+            soup.find("main")
+            or soup.find("article")
+            or soup.find(id="content")
+            or soup.find(class_="content")
+            or soup.body
+            or soup
+        )
+
+        converter = html2text.HTML2Text()
+        converter.ignore_links = True
+        converter.ignore_images = True
+        converter.body_width = 0        # no forced line-wrap
+        content = converter.handle(str(body))
+
+        # Collapse excessive blank lines
+        content = re.sub(r"\n{3,}", "\n\n", content).strip()
+
+        if len(content) > _SCRAPE_MAX_CHARS:
+            content = content[:_SCRAPE_MAX_CHARS] + "\n\n[Content truncated — page too long]"
+
+        logger.info(f"Scraped {url}: {len(content)} chars")
+        return True, content
+
+    except requests.exceptions.Timeout:
+        return False, f"Request timed out after {_SCRAPE_TIMEOUT}s fetching {url}"
+    except requests.exceptions.ConnectionError:
+        return False, f"Could not connect to {url} — check the URL and your network"
+    except requests.exceptions.HTTPError as exc:
+        return False, f"HTTP {exc.response.status_code} returned by {url}"
+    except Exception as exc:
+        return False, f"Unexpected error scraping {url}: {exc}"
+
+
 @dataclass
 class CompanyInputs:
     linkedin_url: str
-    website: str
+    website: str        # original URL or free-text summary
     job_posting: str
+    website_content: Optional[str] = None  # scraped Markdown; None when website is free-text or scrape failed
+
+    @property
+    def website_context(self) -> str:
+        """Return scraped Markdown if available, otherwise the raw website field."""
+        return self.website_content if self.website_content else self.website
 
 @dataclass
 class PipelineResults:
@@ -225,7 +300,12 @@ Style: Technical peer delivering honest feedback"""
         """Generate cache key from inputs"""
         combined = f"{inputs.linkedin_url}{inputs.website}{inputs.job_posting}"
         return hashlib.md5(combined.encode()).hexdigest()
-    
+
+    def _extract_json(self, text: str) -> Dict[str, Any]:
+        """Parse JSON from LLM response, stripping markdown code fences if present."""
+        stripped = re.sub(r"^```(?:json)?\s*|\s*```$", "", text.strip(), flags=re.DOTALL)
+        return json.loads(stripped)
+
     def extract_signals(self, inputs: CompanyInputs) -> Dict[str, Any]:
         """Stage 1: Extract structured signals without interpretation"""
         system_prompt = self.prompts["extract_signals"]
@@ -233,16 +313,16 @@ Style: Technical peer delivering honest feedback"""
         user_prompt = f"""Extract signals from:
 
 LinkedIn/Company: {inputs.linkedin_url}
-Website/Summary: {inputs.website}
+Website Content:
+{inputs.website_context}
 Job Posting: {inputs.job_posting}"""
 
         response = self._make_llm_call(system_prompt, user_prompt)
         logger.info(f"Signals extracted: {response[:200]}...")
-        
+
         try:
-            return json.loads(response)
+            return self._extract_json(response)
         except json.JSONDecodeError:
-            # Fallback if JSON parsing fails
             return {"error": "Failed to parse signals", "raw_response": response}
     
     def diagnose(self, signals: Dict[str, Any], inputs: CompanyInputs) -> str:
@@ -255,7 +335,8 @@ Extracted Signals: {json.dumps(signals, indent=2)}
 
 Original Context:
 LinkedIn/Company: {inputs.linkedin_url}
-Website: {inputs.website}
+Website Content:
+{inputs.website_context}
 Job Posting: {inputs.job_posting}"""
 
         response = self._make_llm_call(system_prompt, user_prompt)
@@ -350,9 +431,9 @@ class PDFGenerator:
         cleaned = soup.get_text()
         # Remove extra whitespace
         cleaned = re.sub(r'\n\s*\n', '\n\n', cleaned)
-        # Replace problematic characters
-        cleaned = cleaned.replace('"', '"').replace('"', '"')
-        cleaned = cleaned.replace(''', "'").replace(''', "'")
+        # Replace problematic characters using explicit Unicode code points
+        cleaned = cleaned.replace('\u201c', '"').replace('\u201d', '"')
+        cleaned = cleaned.replace('\u2018', "'").replace('\u2019', "'")
         cleaned = cleaned.replace('–', '-').replace('—', '-')
         cleaned = cleaned.replace('…', '...')
         # Remove any remaining non-ASCII characters
@@ -614,9 +695,22 @@ def main():
             elif 'ba_assistant' not in st.session_state:
                 st.error("Please provide OpenAI API key.")
             else:
+                website_content = None
+
+                # Scrape the website URL if one was provided
+                if _is_url(website):
+                    with st.spinner(f"Scraping {website} …"):
+                        ok, result = scrape_website(website)
+                    if ok:
+                        website_content = result
+                        st.success(f"Website scraped — {len(result):,} chars of content extracted.")
+                    else:
+                        st.warning(f"Could not scrape website: {result}. Proceeding without page content.")
+
                 with st.spinner("Running AI reasoning pipeline..."):
                     try:
-                        inputs = CompanyInputs(linkedin_url, website, job_posting)
+                        inputs = CompanyInputs(linkedin_url, website, job_posting,
+                                               website_content=website_content)
                         st.session_state.results = st.session_state.ba_assistant.run_full_pipeline(inputs)
                         st.success("Analysis complete!")
                     except Exception as e:
