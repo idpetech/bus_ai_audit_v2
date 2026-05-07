@@ -9,6 +9,9 @@ import sqlite3
 from datetime import datetime
 from typing import Dict, Any, Optional, List, Tuple
 from dataclasses import dataclass, asdict
+from urllib.parse import urlparse
+import requests
+from playwright.sync_api import sync_playwright
 from fpdf import FPDF
 import markdown
 from bs4 import BeautifulSoup
@@ -22,11 +25,543 @@ import io
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+_SCRAPE_TIMEOUT = 15000        # milliseconds (15 seconds for page load)
+_SCRAPE_MAX_CHARS = 40_000    # ~10k tokens; keeps LLM context manageable
+
+def _is_url(text: str) -> bool:
+    """Return True if text looks like an http/https URL."""
+    try:
+        p = urlparse(text.strip())
+        return p.scheme in ("http", "https") and bool(p.netloc)
+    except Exception:
+        return False
+
+
+def discover_relevant_pages(page, base_url: str) -> List[str]:
+    """
+    Discover relevant pages for AI readiness analysis from a website.
+    
+    Returns list of URLs to scrape for comprehensive company analysis.
+    """
+    try:
+        # Clean the input URL
+        base_url = base_url.strip()
+        
+        # Comprehensive keywords for business analysis - covering all aspects of modern companies
+        relevant_keywords = [
+            # Core company info
+            'about', 'team', 'company', 'people', 'leadership', 'founders', 'who-we-are', 'our-story', 'mission', 'vision',
+            
+            # Products & Services  
+            'products', 'services', 'solutions', 'platform', 'technology', 'tech', 'software', 'tools', 'api', 'features',
+            'pricing', 'plans', 'offerings', 'capabilities', 'stack', 'infrastructure',
+            
+            # Intelligence & Research (as you mentioned)
+            'intelligence', 'research', 'insights', 'analytics', 'data', 'analysis', 'reports', 'findings',
+            'expertise', 'expert', 'experts', 'opportunities', 'consulting', 'advisory', 'specialists',
+            'data-engine', 'engine', 'algorithms', 'machine-learning', 'ai', 'artificial-intelligence',
+            
+            # Business operations
+            'careers', 'jobs', 'hiring', 'work', 'culture', 'join-us', 'openings', 'positions', 'talent',
+            'resources', 'support', 'help', 'documentation', 'docs', 'guides', 'tutorials',
+            
+            # Marketing & Content
+            'blog', 'news', 'press', 'media', 'insights', 'articles', 'updates', 'announcements',
+            'case-studies', 'customers', 'clients', 'portfolio', 'success', 'testimonials', 'reviews',
+            'use-cases', 'examples', 'stories', 'showcase',
+            
+            # Business development
+            'partners', 'partnerships', 'integrations', 'ecosystem', 'marketplace', 'network',
+            'events', 'webinars', 'workshops', 'training', 'education', 'learning',
+            
+            # Contact & Legal
+            'contact', 'get-in-touch', 'reach-out', 'connect', 'talk', 'demo', 'sales',
+            'investor', 'investors', 'funding', 'investment', 'venture', 'equity',
+            'legal', 'privacy', 'terms', 'security', 'compliance', 'governance',
+            
+            # Industry-specific
+            'research', 'development', 'innovation', 'labs', 'r&d', 'science', 'engineering',
+            'enterprise', 'business', 'corporate', 'professional', 'industrial',
+            'startups', 'scale', 'growth', 'expansion', 'global', 'international',
+            
+            # Modern business terms
+            'saas', 'cloud', 'digital', 'automation', 'workflow', 'optimization',
+            'performance', 'efficiency', 'productivity', 'transformation', 'modernization'
+        ]
+        
+        # Get all links from the page with more comprehensive detection
+        links = page.evaluate("""
+            () => {
+                const links = [];
+                document.querySelectorAll('a[href]').forEach(link => {
+                    const href = link.getAttribute('href');
+                    const text = (link.textContent || link.innerText || '').toLowerCase().trim();
+                    const title = (link.getAttribute('title') || '').toLowerCase();
+                    const ariaLabel = (link.getAttribute('aria-label') || '').toLowerCase();
+                    if (href) {
+                        links.push({ 
+                            href, 
+                            text,
+                            title,
+                            ariaLabel,
+                            fullText: text + ' ' + title + ' ' + ariaLabel
+                        });
+                    }
+                });
+                return links;
+            }
+        """)
+        
+        logger.info(f"🔍 Found {len(links)} total links on page")
+        
+        # Track URLs by source
+        discovered_urls = set()  # Actually found on the page
+        guessed_urls = set()     # From our common paths list
+        
+        base_domain = urlparse(base_url).netloc.strip()
+        base_scheme = urlparse(base_url).scheme.strip()
+        
+        logger.debug(f"🔍 Base URL: '{base_url}'")
+        logger.debug(f"🔍 Base domain: '{base_domain}' (length: {len(base_domain)})")
+        logger.debug(f"🔍 Base scheme: '{base_scheme}'")
+        
+        # Comprehensive common page patterns - includes your specific examples
+        common_paths = [
+            # Core company pages
+            '/about', '/about-us', '/company', '/team', '/people', '/leadership', '/founders',
+            '/mission', '/vision', '/who-we-are', '/our-story',
+            
+            # Products & Services
+            '/products', '/services', '/solutions', '/platform', '/technology', '/tech', '/software',
+            '/tools', '/api', '/features', '/pricing', '/plans', '/offerings', '/capabilities',
+            
+            # Intelligence & Research (your examples)
+            '/intelligence', '/research', '/insights', '/analytics', '/data', '/analysis',
+            '/expert-opportunities', '/experts', '/expertise', '/consulting', '/advisory',
+            '/data-engine', '/engine', '/algorithms', '/machine-learning', '/ai',
+            
+            # Business operations  
+            '/careers', '/jobs', '/join-us', '/hiring', '/work-with-us', '/openings',
+            '/culture', '/talent', '/positions',
+            
+            # Content & Marketing
+            '/blog', '/news', '/press', '/media', '/insights', '/articles', '/updates',
+            '/case-studies', '/customers', '/clients', '/portfolio', '/success', '/testimonials',
+            '/use-cases', '/examples', '/stories', '/showcase',
+            
+            # Business development
+            '/partners', '/partnerships', '/integrations', '/ecosystem', '/marketplace',
+            '/events', '/webinars', '/workshops', '/training', '/education',
+            
+            # Contact & Sales (your "Get in touch" example)
+            '/contact', '/contact-us', '/get-in-touch', '/reach-out', '/connect',
+            '/talk', '/demo', '/sales', '/support', '/help',
+            
+            # Investment & Legal
+            '/investors', '/funding', '/investment', '/legal', '/privacy', '/terms',
+            '/security', '/compliance',
+            
+            # R&D and Innovation
+            '/research', '/development', '/innovation', '/labs', '/r-and-d', '/science',
+            '/engineering', '/resources', '/documentation', '/docs', '/guides'
+        ]
+        
+        # Add common paths as potential URLs (these are guesses)
+        for path in common_paths[:3]:  # Just debug first 3
+            potential_url = f"{base_scheme}://{base_domain}{path}"
+            logger.debug(f"🔍 Creating URL: '{base_scheme}' + '://' + '{base_domain}' + '{path}' = '{potential_url}'")
+            guessed_urls.add(potential_url)
+        
+        # Add the rest without debug spam
+        for path in common_paths[3:]:
+            potential_url = f"{base_scheme}://{base_domain}{path}"
+            guessed_urls.add(potential_url)
+        
+        # Process discovered links
+        for link in links:
+            href = link['href']
+            text = link['text']
+            full_text = link['fullText']
+            
+            # Convert relative URLs to absolute
+            if href.startswith('/'):
+                full_url = f"{base_scheme}://{base_domain}{href}"
+            elif href.startswith('http'):
+                full_url = href
+            elif href.startswith('#'):
+                continue  # Skip anchors
+            else:
+                # Handle other relative URLs
+                full_url = f"{base_scheme}://{base_domain}/{href}"
+            
+            # Clean up URL - remove extra spaces and normalize  
+            full_url = full_url.replace(' /', '/').replace('/ ', '/').strip()
+                
+            # Check if URL belongs to same domain
+            try:
+                if urlparse(full_url).netloc != base_domain:
+                    continue
+            except:
+                continue
+                
+            # Check if URL or link text contains relevant keywords
+            url_lower = full_url.lower()
+            
+            if any(keyword in url_lower or keyword in full_text for keyword in relevant_keywords):
+                discovered_urls.add(full_url)
+                logger.info(f"📄 Found relevant link: {full_url} (matched: {text})")
+                logger.debug(f"🔍 URL before cleanup: '{href}' -> after: '{full_url}'")
+        
+        # Debug: Show what we found
+        logger.info(f"🔍 Raw discovered URLs: {list(discovered_urls)[:5]}...")
+        logger.info(f"🔍 Raw guessed URLs: {list(guessed_urls)[:5]}...")
+        
+        # Remove the base URL from both sets
+        discovered_urls.discard(base_url)
+        guessed_urls.discard(base_url)
+        
+        # Filter out duplicate paths and common non-content pages
+        filtered_discovered = []
+        filtered_guessed = []
+        seen_paths = set()
+        
+        # First process discovered URLs (they take priority)
+        for url in discovered_urls:
+            path = urlparse(url).path.lower()
+            
+            # Skip if we've seen this path or if it's a non-content page
+            if path in seen_paths or any(skip in path for skip in ['/wp-', '/admin', '/login', '/register', '/search']):
+                continue
+                
+            seen_paths.add(path)
+            filtered_discovered.append(url)
+        
+        # Then process guessed URLs (only if we haven't seen the path)
+        for url in guessed_urls:
+            path = urlparse(url).path.lower()
+            
+            # Skip if we've seen this path or if it's a non-content page
+            if path in seen_paths or any(skip in path for skip in ['/wp-', '/admin', '/login', '/register', '/search']):
+                continue
+                
+            seen_paths.add(path)
+            filtered_guessed.append(url)
+        
+        # Now we have clean separation
+        
+        logger.info(f"🎯 Discovered real pages: {len(filtered_discovered)}, Guessed paths: {len(filtered_guessed)}")
+        
+        # Prioritize DISCOVERED pages first (they actually exist!)
+        prioritized_urls = []
+        
+        # Priority 1: Actually discovered pages
+        priority_keywords = ['intelligence', 'research', 'data-engine', 'experts', 'about', 'team', 'products', 'careers']
+        for keyword in priority_keywords:
+            for url in filtered_discovered:
+                if keyword in url.lower() and url not in prioritized_urls:
+                    prioritized_urls.append(url)
+                    logger.info(f"✅ Prioritized discovered page: {url}")
+                    if len(prioritized_urls) >= 5:
+                        break
+            if len(prioritized_urls) >= 5:
+                break
+        
+        # Priority 2: Fill remaining slots with other discovered pages
+        for url in filtered_discovered:
+            if url not in prioritized_urls:
+                prioritized_urls.append(url)
+                logger.info(f"➕ Added discovered page: {url}")
+                if len(prioritized_urls) >= 5:
+                    break
+        
+        # Priority 3: Only add guessed paths if we have slots left
+        if len(prioritized_urls) < 5:
+            logger.info(f"🔍 Trying guessed paths to fill remaining slots...")
+            for url in filtered_guessed:
+                if url not in prioritized_urls:
+                    prioritized_urls.append(url)
+                    logger.info(f"🤞 Added guessed path: {url}")
+                    if len(prioritized_urls) >= 5:
+                        break
+        
+        logger.info(f"📋 Prioritized {len(prioritized_urls)} pages for scraping: {prioritized_urls}")
+        
+        # Debug: Show individual URLs to check for spaces
+        for i, url in enumerate(prioritized_urls):
+            logger.debug(f"🔍 URL {i+1}: '{url}' (length: {len(url)})")
+            
+        return prioritized_urls
+        
+    except Exception as e:
+        logger.error(f"Page discovery failed: {e}")
+        return []
+
+
+def test_page_existence(page, url: str) -> Tuple[bool, int, str]:
+    """
+    Quickly test if a page exists without full content extraction.
+    Returns (exists, status_code, title).
+    """
+    try:
+        response = page.goto(url, wait_until="domcontentloaded", timeout=10000)  # Quick test, 10s timeout
+        
+        if not response:
+            return False, 0, ""
+        
+        status_code = response.status
+        
+        # Check if it's a successful response
+        if status_code >= 200 and status_code < 400:
+            # Get basic page info
+            title = page.evaluate("() => document.title || 'Untitled Page'")
+            
+            # Quick content check - make sure it's not just an error page
+            has_content = page.evaluate("""
+                () => {
+                    const body = document.body;
+                    const text = (body?.innerText || body?.textContent || '').trim();
+                    return text.length > 100; // At least 100 chars of content
+                }
+            """)
+            
+            return has_content, status_code, title
+        else:
+            return False, status_code, ""
+            
+    except Exception as e:
+        logger.warning(f"⚠️ Error testing {url}: {str(e)}")
+        return False, 0, ""
+
+
+def scrape_single_page(page, url: str) -> Tuple[bool, str, str]:
+    """
+    Scrape a single page and return success, content, and page title.
+    """
+    try:
+        response = page.goto(url, wait_until="networkidle", timeout=_SCRAPE_TIMEOUT)
+        
+        if not response or not response.ok:
+            return False, f"Failed to load {url} - HTTP {response.status if response else 'timeout'}", ""
+        
+        # Get page title
+        title = page.evaluate("() => document.title || 'Untitled Page'")
+        
+        # Execute JavaScript to clean and extract content
+        content = page.evaluate("""
+            () => {
+                // Remove noise elements
+                const noiseSelectors = [
+                    'script', 'style', 'nav', 'footer', 'header', 'aside', 
+                    '.navigation', '.sidebar', '.menu', '.ads', '.advertisement',
+                    '.cookie-banner', '.popup', '.modal', '.overlay'
+                ];
+                
+                noiseSelectors.forEach(selector => {
+                    document.querySelectorAll(selector).forEach(el => el.remove());
+                });
+                
+                // Find main content area
+                let mainElement = 
+                    document.querySelector('main') ||
+                    document.querySelector('article') ||
+                    document.querySelector('#content') ||
+                    document.querySelector('.content') ||
+                    document.querySelector('.main-content') ||
+                    document.querySelector('.post-content') ||
+                    document.querySelector('.entry-content') ||
+                    document.querySelector('.page-content') ||
+                    document.body;
+                
+                if (!mainElement) {
+                    return 'No main content found on page';
+                }
+                
+                // Get clean text content
+                let text = mainElement.innerText || mainElement.textContent || '';
+                
+                // Clean up the text
+                text = text
+                    .replace(/\\s+/g, ' ')
+                    .replace(/\\n\\s*\\n\\s*\\n+/g, '\\n\\n')
+                    .trim();
+                
+                return text;
+            }
+        """)
+        
+        return True, content, title
+        
+    except Exception as e:
+        return False, f"Error scraping {url}: {str(e)}", ""
+
+
+def scrape_website(url: str) -> Tuple[bool, Dict[str, Any]]:
+    """
+    Comprehensively scrape a website including relevant pages for AI readiness analysis.
+    
+    Returns (success, results_dict). Results dict contains:
+    - 'main_content': Combined content from all scraped pages
+    - 'pages_scraped': List of dictionaries with page details
+    - 'total_chars': Total characters scraped
+    - 'page_count': Number of pages scraped
+    """
+    try:
+        with sync_playwright() as p:
+            # Launch browser in headless mode (no GUI)
+            browser = p.chromium.launch(headless=True)
+            
+            # Create new page with mobile user agent to avoid bot detection
+            context = browser.new_context(
+                user_agent='Mozilla/5.0 (iPhone; CPU iPhone OS 14_7_1 like Mac OS X) AppleWebKit/605.1.15'
+            )
+            page = context.new_page()
+            page.set_default_timeout(_SCRAPE_TIMEOUT)
+            
+            pages_scraped = []
+            all_content = []
+            
+            # Step 1: Scrape the main page
+            logger.info(f"📄 Scraping main page: {url}")
+            success, content, title = scrape_single_page(page, url.strip())
+            
+            if not success:
+                browser.close()
+                return False, {"error": content}
+            
+            pages_scraped.append({
+                "url": url,
+                "title": title,
+                "content": content,
+                "char_count": len(content),
+                "page_type": "Main Page"
+            })
+            all_content.append(f"=== {title} ===\nURL: {url}\n\n{content}")
+            
+            # Step 2: Discover ALL relevant pages
+            logger.info(f"🔍 Discovering relevant pages from {url}")
+            relevant_pages = discover_relevant_pages(page, url)
+            logger.info(f"📋 Found {len(relevant_pages)} potential relevant pages")
+            
+            # Step 3: PHASE 1 - Test ALL pages for existence (quick check)
+            logger.info(f"🧪 Phase 1: Testing all {len(relevant_pages)} pages for existence...")
+            working_pages = []
+            
+            for i, page_url in enumerate(relevant_pages):
+                logger.info(f"🧪 Testing {i+1}/{len(relevant_pages)}: {page_url}")
+                exists, status_code, title = test_page_existence(page, page_url)
+                
+                if exists:
+                    working_pages.append({
+                        "url": page_url,
+                        "title": title,
+                        "status_code": status_code
+                    })
+                    logger.info(f"✅ Page exists: {page_url} ({status_code}) - {title}")
+                else:
+                    logger.info(f"❌ Page not found: {page_url} ({status_code})")
+            
+            logger.info(f"📊 Phase 1 complete: {len(working_pages)} working pages found out of {len(relevant_pages)} tested")
+            
+            # Step 4: PHASE 2 - Prioritize and scrape only WORKING pages
+            if working_pages:
+                logger.info(f"🎯 Phase 2: Scraping {min(5, len(working_pages))} working pages...")
+                
+                # Prioritize working pages
+                priority_keywords = ['intelligence', 'research', 'data-engine', 'experts', 'about', 'team', 'products', 'careers']
+                working_pages.sort(key=lambda p: next((i for i, keyword in enumerate(priority_keywords) 
+                                                     if keyword in p['url'].lower() or keyword in p['title'].lower()), 999))
+                
+                # Scrape up to 5 working pages
+                for i, page_info in enumerate(working_pages[:5]):
+                    page_url = page_info['url']
+                    try:
+                        logger.info(f"📄 Scraping working page {i+1}/{min(5, len(working_pages))}: {page_url}")
+                        success, content, title = scrape_single_page(page, page_url)
+                        
+                        if success and len(content.strip()) > 100:  # Only include substantive content
+                            # Determine page type based on URL/title
+                            page_type = "Other"
+                            url_lower = page_url.lower()
+                            title_lower = title.lower()
+                            
+                            if any(word in url_lower or word in title_lower for word in ['intelligence', 'ai', 'data']):
+                                page_type = "Intelligence/AI"
+                            elif any(word in url_lower or word in title_lower for word in ['research', 'insights', 'analysis']):
+                                page_type = "Research/Insights"
+                            elif any(word in url_lower or word in title_lower for word in ['expert', 'consulting', 'advisory']):
+                                page_type = "Expert/Consulting"
+                            elif any(word in url_lower or word in title_lower for word in ['about', 'company']):
+                                page_type = "About/Company"
+                            elif any(word in url_lower or word in title_lower for word in ['team', 'people', 'leadership']):
+                                page_type = "Team/People"
+                            elif any(word in url_lower or word in title_lower for word in ['product', 'service', 'solution']):
+                                page_type = "Products/Services"
+                            elif any(word in url_lower or word in title_lower for word in ['career', 'job', 'hiring']):
+                                page_type = "Careers/Jobs"
+                            elif any(word in url_lower or word in title_lower for word in ['blog', 'news', 'press']):
+                                page_type = "Blog/News"
+                            
+                            pages_scraped.append({
+                                "url": page_url,
+                                "title": title,
+                                "content": content,
+                                "char_count": len(content),
+                                "page_type": page_type
+                            })
+                            all_content.append(f"=== {title} ===\nURL: {page_url}\n\n{content}")
+                            logger.info(f"📄 Successfully scraped: {page_url} ({len(content)} chars)")
+                            
+                    except Exception as e:
+                        logger.warning(f"⚠️ Failed to scrape working page {page_url}: {str(e)}")
+                        continue
+            else:
+                logger.warning(f"⚠️ No working pages found - all discovered pages returned errors")
+            
+            browser.close()
+            
+            # Combine all content
+            combined_content = "\n\n" + "="*80 + "\n\n".join(all_content)
+            
+            # Apply total length limit
+            if len(combined_content) > _SCRAPE_MAX_CHARS:
+                combined_content = combined_content[:_SCRAPE_MAX_CHARS] + "\n\n[Content truncated — total content too long]"
+            
+            total_chars = len(combined_content)
+            page_count = len(pages_scraped)
+            
+            logger.info(f"🎯 Multi-page scraping complete: {page_count} pages, {total_chars:,} total chars")
+            
+            return True, {
+                "main_content": combined_content,
+                "pages_scraped": pages_scraped,
+                "total_chars": total_chars,
+                "page_count": page_count
+            }
+            
+    except Exception as exc:
+        error_msg = str(exc)
+        
+        # Provide specific error messages for common issues
+        if "timeout" in error_msg.lower():
+            return False, {"error": f"Page took too long to load: {url} (timeout after 15s)"}
+        elif "net::" in error_msg:
+            return False, {"error": f"Network error accessing {url} - check URL and internet connection"}
+        elif "browser" in error_msg.lower():
+            return False, {"error": f"Browser error - Playwright may not be properly installed: {error_msg}"}
+        else:
+            return False, {"error": f"Scraping error for {url}: {error_msg}"}
+
 @dataclass
 class CompanyInputs:
     linkedin_url: str
-    website: str
+    website: str        # original URL or free-text summary
     job_posting: str
+    website_content: Optional[str] = None  # scraped Markdown; None when website is free-text or scrape failed
+
+    @property
+    def website_context(self) -> str:
+        """Return scraped Markdown if available, otherwise the raw website field."""
+        return self.website_content if self.website_content else self.website
 
 @dataclass
 class PipelineResults:
@@ -975,7 +1510,8 @@ Style: Technical peer delivering honest feedback"""
         user_prompt = f"""Extract signals from:
 
 LinkedIn/Company: {inputs.linkedin_url}
-Website/Summary: {inputs.website}
+Website Content:
+{inputs.website_context}
 Job Posting: {inputs.job_posting}
 
 {f"HINT: Detected company name from LinkedIn URL: '{suggested_company}'" if suggested_company else ""}
@@ -1013,7 +1549,8 @@ Extracted Signals: {json.dumps(signals, indent=2)}
 
 Original Context:
 LinkedIn/Company: {inputs.linkedin_url}
-Website: {inputs.website}
+Website Content:
+{inputs.website_context}
 Job Posting: {inputs.job_posting}"""
 
         response = self._make_llm_call(system_prompt, user_prompt)
@@ -1214,9 +1751,75 @@ def main():
             elif 'ba_assistant' not in st.session_state:
                 st.error("Please provide OpenAI API key.")
             else:
+                website_content = None
+
+                # Scrape the website URL if one was provided
+                if _is_url(website):
+                    with st.spinner(f"🎯 Comprehensive scraping {website} with JavaScript rendering (FREE)…"):
+                        ok, result = scrape_website(website)
+                    if ok:
+                        website_content = result["main_content"]
+                        pages_data = result["pages_scraped"]
+                        total_chars = result["total_chars"]
+                        page_count = result["page_count"]
+                        
+                        st.success(f"✅ Website comprehensively scraped with Playwright — {page_count} pages, {total_chars:,} total chars (JavaScript rendered)")
+                        
+                        # Show comprehensive scraped content in expandable evidence panel
+                        with st.expander(f"🔍 **Multi-Page Scraping Evidence** - {page_count} pages scraped", expanded=False):
+                            st.markdown("**Source URL:** " + website)
+                            st.markdown("**Extraction Method:** Playwright with JavaScript rendering + Intelligent page discovery")
+                            st.markdown(f"**Pages Scraped:** {page_count} pages")
+                            st.markdown(f"**Total Content:** {total_chars:,} characters")
+                            st.markdown("---")
+                            
+                            # Show overview of scraped pages
+                            st.markdown("### 📋 Pages Scraped Overview:")
+                            for i, page_data in enumerate(pages_data):
+                                st.markdown(f"""
+**{i+1}. {page_data['page_type']}** - *{page_data['title']}*
+- URL: `{page_data['url']}`
+- Content: {page_data['char_count']:,} chars
+                                """)
+                            
+                            st.markdown("---")
+                            
+                            # Display combined content
+                            st.markdown("### 📄 Combined Website Content:")
+                            st.markdown("```markdown")
+                            st.text(website_content)
+                            st.markdown("```")
+                            
+                            # Show individual page content in tabs
+                            st.markdown("---")
+                            st.markdown("### 📑 Individual Page Content:")
+                            
+                            if len(pages_data) > 1:
+                                page_tabs = st.tabs([f"{p['page_type']}" for p in pages_data])
+                                for i, page_data in enumerate(pages_data):
+                                    with page_tabs[i]:
+                                        st.markdown(f"**Title:** {page_data['title']}")
+                                        st.markdown(f"**URL:** {page_data['url']}")
+                                        st.markdown(f"**Content Length:** {page_data['char_count']:,} chars")
+                                        st.markdown("---")
+                                        st.text_area(
+                                            f"Content from {page_data['page_type']}",
+                                            value=page_data['content'],
+                                            height=300,
+                                            key=f"page_content_{i}"
+                                        )
+                            
+                            # Additional metadata
+                            st.markdown("---")
+                            st.caption("💡 This comprehensive content includes the main page plus automatically discovered relevant pages (About, Team, Products, etc.) that provide full context for AI readiness analysis.")
+                    else:
+                        error_msg = result.get("error", "Unknown error") if isinstance(result, dict) else result
+                        st.warning(f"❌ Playwright multi-page scraping failed: {error_msg}. Proceeding without page content.")
+
                 with st.spinner("Running production advisory pipeline..."):
                     try:
-                        inputs = CompanyInputs(linkedin_url, website, job_posting)
+                        inputs = CompanyInputs(linkedin_url, website, job_posting,
+                                               website_content=website_content)
                         
                         # Clear any previously loaded company state for fresh analysis
                         if 'loaded_company' in st.session_state:
