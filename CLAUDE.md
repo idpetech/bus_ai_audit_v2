@@ -142,3 +142,20 @@ OPENAI_API_KEY=your_openai_api_key
 This is a solo-built sales tool for fractional CTO prospecting.
 Stability over cleverness. If unsure, ask before refactoring.
 	
+## Checkpoint policy
+- Create a git commit or checkpoint before 
+  every major feature addition
+- Checkpoint naming: 
+  baseline-clean, pre-agent, pre-prospecting etc
+- Never build two major features without 
+  a checkpoint between them
+
+## Build sequence for this project
+Phase 1 ✅ — Core pipeline (current checkpoint)
+Phase 2 — Playwright removal + Firecrawl scraping
+Phase 3 — Agent mode (single company research)
+Phase 4 — Prospecting agent
+
+## Never combine phases in one prompt
+One phase per Claude Code session.
+Validate before proceeding.
