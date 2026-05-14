@@ -232,6 +232,46 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Failed to list companies: {e}")
             return []
+    
+    def delete_company(self, url: str) -> bool:
+        """Delete a company record from database"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.execute("DELETE FROM company_analysis WHERE website_url = ?", (url,))
+                conn.commit()
+                if cursor.rowcount > 0:
+                    logger.info(f"🗑️ Deleted company record for {url}")
+                    return True
+                else:
+                    logger.warning(f"No record found to delete for {url}")
+                    return False
+        except Exception as e:
+            logger.error(f"Failed to delete company record for {url}: {e}")
+            return False
+    
+    def get_context_only(self, url: str) -> Optional[Tuple['CompanyInputs', str]]:
+        """Retrieve only context data (inputs) and company name for reprocessing"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.execute("""
+                    SELECT company_name, scraped_content, external_signals, job_posting
+                    FROM company_analysis WHERE website_url = ?
+                """, (url,))
+                row = cursor.fetchone()
+                
+                if row:
+                    inputs = CompanyInputs(
+                        target_url=url,
+                        company_name=row[0],
+                        scraped_content=row[1],
+                        external_signals=row[2],
+                        job_posting=row[3]
+                    )
+                    return inputs, row[0] or "Unknown Company"
+                return None
+        except Exception as e:
+            logger.error(f"Failed to retrieve context for {url}: {e}")
+            return None
 
 
 class FirecrawlManager:
@@ -1155,17 +1195,55 @@ def main():
             if companies:
                 st.write(f"**{len(companies)} companies analyzed:**")
                 for url, name, updated in companies[:10]:  # Show latest 10
-                    col_name, col_date = st.columns([3, 1])
+                    col_name, col_actions, col_date = st.columns([2.5, 2.5, 1])
                     with col_name:
-                        if st.button(f"📂 {name}", key=f"load_{hashlib.md5(url.encode()).hexdigest()[:8]}"):
-                            # Load cached analysis
-                            cached_data = st.session_state.db_manager.get_analysis(url)
-                            if cached_data:
-                                st.session_state.inputs, st.session_state.results, _ = cached_data
-                                st.success(f"Loaded cached analysis for {name}")
-                                st.rerun()
+                        st.write(f"**{name}**")
+                    with col_actions:
+                        # Create three loading buttons in a single row
+                        btn_col1, btn_col2, btn_col3, btn_col4 = st.columns([1, 1, 1, 0.8])
+                        
+                        with btn_col1:
+                            if st.button("📄", key=f"context_{hashlib.md5(url.encode()).hexdigest()[:8]}", help="Load context only (for reprocessing)"):
+                                # Load only context for reprocessing
+                                context_data = st.session_state.db_manager.get_context_only(url)
+                                if context_data:
+                                    st.session_state.inputs, _ = context_data
+                                    st.session_state.results = None  # Clear previous results
+                                    st.success(f"Loaded context for {name} - ready for reprocessing")
+                                    st.rerun()
+                        
+                        with btn_col2:
+                            if st.button("📊", key=f"results_{hashlib.md5(url.encode()).hexdigest()[:8]}", help="Load results only (view analysis)"):
+                                # Load only results for viewing
+                                cached_data = st.session_state.db_manager.get_analysis(url)
+                                if cached_data:
+                                    _, st.session_state.results, _ = cached_data
+                                    st.session_state.inputs = None  # Clear inputs
+                                    st.success(f"Loaded results for {name}")
+                                    st.rerun()
+                        
+                        with btn_col3:
+                            if st.button("📂", key=f"full_{hashlib.md5(url.encode()).hexdigest()[:8]}", help="Load complete analysis (context + results)"):
+                                # Load complete analysis
+                                cached_data = st.session_state.db_manager.get_analysis(url)
+                                if cached_data:
+                                    st.session_state.inputs, st.session_state.results, _ = cached_data
+                                    st.success(f"Loaded complete analysis for {name}")
+                                    st.rerun()
+                        
+                        with btn_col4:
+                            if st.button("🗑️", key=f"delete_{hashlib.md5(url.encode()).hexdigest()[:8]}", help="Delete company record"):
+                                if st.session_state.db_manager.delete_company(url):
+                                    st.success(f"Deleted {name}")
+                                    st.rerun()
+                                else:
+                                    st.error(f"Failed to delete {name}")
+                    
                     with col_date:
                         st.caption(updated.strftime("%m/%d"))
+                        
+                # Add comprehensive legend for buttons
+                st.caption("**Load Options:** 📄 Context only (reprocess) • 📊 Results only (view) • 📂 Complete analysis • 🗑️ Delete record")
             else:
                 st.info("No companies analyzed yet.")
         
@@ -1185,6 +1263,56 @@ def main():
             help="Optional job posting to enhance technical signal detection"
         )
         
+        # Context editing section (shows when context is loaded for reprocessing)
+        if 'inputs' in st.session_state and st.session_state.inputs and not st.session_state.get('results'):
+            st.divider()
+            with st.expander("✏️ Edit Loaded Context", expanded=True):
+                st.info("📝 Context loaded from database. You can edit and add additional context before reprocessing.")
+                
+                # Show/edit scraped content
+                if st.session_state.inputs.scraped_content:
+                    st.subheader("Company Self-Perception")
+                    edited_scraped = st.text_area(
+                        "Company narrative (scraped content):",
+                        value=st.session_state.inputs.scraped_content,
+                        height=150,
+                        key="edit_scraped"
+                    )
+                    st.session_state.inputs.scraped_content = edited_scraped
+                
+                # Show/edit external signals
+                if st.session_state.inputs.external_signals:
+                    st.subheader("External Technical Signals")
+                    edited_signals = st.text_area(
+                        "External signals:",
+                        value=st.session_state.inputs.external_signals,
+                        height=150,
+                        key="edit_signals"
+                    )
+                    st.session_state.inputs.external_signals = edited_signals
+                
+                # Additional context input
+                st.subheader("Additional Context")
+                additional_context = st.text_area(
+                    "Add any additional context or insights:",
+                    placeholder="Add new technical insights, competitor analysis, or other relevant context...",
+                    height=100,
+                    key="additional_context"
+                )
+                
+                # Append additional context to job posting if provided
+                if additional_context and additional_context.strip():
+                    if st.session_state.inputs.job_posting:
+                        st.session_state.inputs.job_posting = f"{st.session_state.inputs.job_posting}\n\nAdditional Context:\n{additional_context}"
+                    else:
+                        st.session_state.inputs.job_posting = f"Additional Context:\n{additional_context}"
+                
+                # Override the primary inputs when editing
+                if st.session_state.inputs.target_url:
+                    target_url = st.session_state.inputs.target_url
+                if st.session_state.inputs.job_posting:
+                    job_posting = st.session_state.inputs.job_posting
+        
         # Check for cached analysis
         cached_analysis = None
         if target_url:
@@ -1193,7 +1321,17 @@ def main():
         # Main action buttons
         run_analysis = False
         
-        if cached_analysis:
+        # Handle different loading modes
+        if 'inputs' in st.session_state and st.session_state.inputs and not st.session_state.get('results'):
+            # Context-only mode (ready for reprocessing)
+            st.info("🔄 **Context Loaded for Reprocessing** - Ready to run analysis on existing context")
+            if st.button("⚗️ Reprocess with Context", type="primary", help="Run analysis on loaded context (uses API credits)"):
+                run_analysis = True
+        elif 'results' in st.session_state and st.session_state.results and not st.session_state.get('inputs'):
+            # Results-only mode (view only)
+            st.info("📊 **Results Loaded for Viewing** - Analysis results displayed below")
+            st.caption("💡 To reprocess this analysis, use the 📄 Context button to load context for editing")
+        elif cached_analysis:
             col_run, col_refresh = st.columns(2)
             with col_run:
                 if st.button("⚗️ Run Fresh Assessment", type="primary", help="Run new technical analysis (uses API credits)"):
@@ -1208,31 +1346,69 @@ def main():
                 run_analysis = True
         
         if run_analysis:
-            if not target_url:
-                st.error("Please provide a target company URL.")
-            elif not _is_url(target_url):
-                st.error("Please provide a valid URL (must start with http:// or https://)")
-            else:
-                # Status tracking container with technical process feedback
-                status_container = st.status("⚗️ Distilling Architectural Signals...", expanded=True)
-                
-                try:
-                    with status_container:
-                        st.write("🔍 Checking local cache for existing analysis...")
-                        st.write("⚗️ Initializing credit-efficient scraping protocol...")
-                        st.write("🎯 Preparing targeted external signal hunt...")
-                        
-                        # Run the agentic triangulation loop
-                        inputs, results = st.session_state.ba_assistant.run_triangulation(
-                            target_url,
-                            job_posting,
-                            st.session_state.firecrawl_manager,
-                            st.session_state.db_manager
+            # Check if we're reprocessing existing context or running fresh analysis
+            if 'inputs' in st.session_state and st.session_state.inputs and not st.session_state.get('results'):
+                # Context reprocessing mode
+                if not target_url:
+                    st.error("Please provide a target company URL.")
+                elif not _is_url(target_url):
+                    st.error("Please provide a valid URL (must start with http:// or https://)")
+                else:
+                    # Status tracking for context reprocessing
+                    status_container = st.status("🔄 Reprocessing Context with Senior Architect Analysis...", expanded=True)
+                    
+                    try:
+                        with status_container:
+                            st.write("📝 Using loaded context from database...")
+                            st.write("⚗️ Running pipeline on existing context...")
+                            st.write("🎯 Generating fresh insights...")
+                            
+                            # Run pipeline on existing context
+                            results = st.session_state.ba_assistant.run_full_pipeline(st.session_state.inputs)
+                            st.session_state.results = results
+                            
+                            # Save updated analysis to database
+                            st.session_state.db_manager.upsert_analysis(
+                                st.session_state.inputs.target_url, 
+                                st.session_state.inputs, 
+                                results
+                            )
+                    except Exception as e:
+                        status_container.update(
+                            label="❌ Context Reprocessing Failed", 
+                            state="error", 
+                            expanded=True
                         )
+                        st.error(f"Context reprocessing failed: {str(e)}")
+                        logger.error(f"Context reprocessing failed: {e}")
                         
-                        st.session_state.inputs = inputs
-                        st.session_state.results = results
-                        
+            else:
+                # Fresh analysis mode
+                if not target_url:
+                    st.error("Please provide a target company URL.")
+                elif not _is_url(target_url):
+                    st.error("Please provide a valid URL (must start with http:// or https://)")
+                else:
+                    # Status tracking container with technical process feedback
+                    status_container = st.status("⚗️ Distilling Architectural Signals...", expanded=True)
+                    
+                    try:
+                        with status_container:
+                            st.write("🔍 Checking local cache for existing analysis...")
+                            st.write("⚗️ Initializing credit-efficient scraping protocol...")
+                            st.write("🎯 Preparing targeted external signal hunt...")
+                            
+                            # Run the agentic triangulation loop
+                            inputs, results = st.session_state.ba_assistant.run_triangulation(
+                                target_url,
+                                job_posting,
+                                st.session_state.firecrawl_manager,
+                                st.session_state.db_manager
+                            )
+                            
+                            st.session_state.inputs = inputs
+                            st.session_state.results = results
+                            
                         status_container.update(
                             label="✅ Architectural Reality Check Complete!", 
                             state="complete", 
@@ -1240,15 +1416,15 @@ def main():
                         )
                         st.success(f"🏗️ Technical assessment complete for {inputs.company_name} - contradictions identified!")
                         st.rerun()
-                        
-                except Exception as e:
-                    status_container.update(
-                        label="❌ Technical Analysis Failed", 
-                        state="error", 
-                        expanded=True
-                    )
-                    st.error(f"Architectural assessment failed: {str(e)}")
-                    logger.error(f"Technical analysis pipeline failed: {e}")
+                            
+                    except Exception as e:
+                        status_container.update(
+                            label="❌ Technical Analysis Failed", 
+                            state="error", 
+                            expanded=True
+                        )
+                        st.error(f"Architectural assessment failed: {str(e)}")
+                        logger.error(f"Technical analysis pipeline failed: {e}")
         
         st.divider()
         

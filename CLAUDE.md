@@ -107,3 +107,38 @@ OPENAI_API_KEY=your_openai_api_key
 - Mechanisms over descriptions in recommendations
 - Virtual environments for Python development
 - Defensive security practices for audit systems
+# IDPETECH BA Assistant — Claude Code Rules
+
+## Before ANY change
+- Read app.py fully before touching anything
+- Confirm understanding of existing class structure
+- List which classes/methods you will modify before modifying them
+- Never rename existing methods or classes
+- Never change existing method signatures without flagging it first
+
+## Architecture rules
+- All classes stay in app.py — no new files unless explicitly asked
+- No new pip dependencies without asking first
+- Database schema changes must be backward compatible
+- Existing Manual Mode must always remain functional
+
+## Code style
+- All network calls wrapped in try/except with 8 second timeout
+- Every new method needs a docstring
+- Log all agent decisions to hunt_log or research_log
+- Never block the pipeline on a single failure
+
+## Testing
+- After any change, confirm existing pipeline still runs
+- Smoke test new features before declaring done
+- State which smoke test you ran and what it returned
+
+## What not to touch
+- Scraping logic unless explicitly asked
+- PDF/Word generation
+- Streamlit UI layout unless explicitly asked
+- SQLite schema for existing tables
+## Project context
+This is a solo-built sales tool for fractional CTO prospecting.
+Stability over cleverness. If unsure, ask before refactoring.
+	
