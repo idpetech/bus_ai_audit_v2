@@ -10,17 +10,31 @@ This is the bus_ai_audit_v2 project - a production-grade Streamlit application c
 
 ```
 bus_ai_audit_v2/
-├── app.py              # Main Streamlit application
-├── requirements.txt    # Python dependencies
-└── CLAUDE.md          # Development guidance
+├── core/                     # Modular core components
+│   ├── __init__.py          # Package initialization
+│   ├── models.py            # Data structures (CompanyInputs, PipelineResults, etc.)
+│   ├── utils.py             # Utility functions (_is_url, sieve_context)
+│   ├── database.py          # SQLite operations (DatabaseManager)
+│   ├── scraping.py          # Web scraping (FirecrawlManager, scrape functions)
+│   ├── pipeline.py          # AI reasoning pipeline (BAAssistant)
+│   ├── export.py            # Document generation (PDF, Word)
+│   └── agent.py             # Agent research mode (ResearchAgent, ICPScorer)
+├── app.py                   # Main Streamlit application (UI only)
+├── requirements.txt         # Python dependencies
+├── CLAUDE.md               # Development guidance
+└── company_reality_check.db # SQLite database (auto-created)
 ```
 
 ## Technology Stack
 
-- **Frontend**: Streamlit for web interface
-- **AI**: OpenAI GPT-4o for multi-stage reasoning pipeline
+- **Frontend**: Streamlit for web interface with dual mode (Manual/Agent)
+- **AI**: OpenAI GPT-4o for multi-stage reasoning pipeline + GPT-4o-mini for agent tasks
+- **Web Scraping**: Firecrawl API for website content extraction and search
+- **Database**: SQLite for company analysis persistence and caching
 - **PDF Generation**: fpdf2 for report exports
+- **Word Generation**: python-docx for document exports
 - **Text Processing**: markdown, beautifulsoup4 for content handling
+- **Token Management**: tiktoken for context sieving and TPM management
 
 ## Development Setup
 
@@ -79,8 +93,23 @@ flake8 app.py
 
 ## Application Architecture
 
-### BAAssistant Pipeline
-The core `BAAssistant` class implements a 5-stage reasoning pipeline:
+### Dual Mode Operation
+The application provides two distinct modes:
+
+**Manual Mode (Original Functionality):**
+- Direct URL input for manual company analysis
+- Company database browser with clickable load buttons
+- Context editing capabilities for reprocessing
+- Prompt management interface
+
+**Agent Mode (New Agentic Research):**
+- Automated company research based on company name only
+- Six-step research process with Firecrawl API integration
+- Two-pass ICP (Ideal Customer Profile) scoring system
+- Alternative company suggestions for disqualified prospects
+
+### Core Pipeline (BAAssistant)
+The `BAAssistant` class in `core/pipeline.py` implements a 5-stage reasoning pipeline:
 
 1. **extract_signals()** - Extract structured JSON from inputs (no interpretation)
 2. **diagnose()** - Strategic analysis of what company thinks vs. reality
@@ -88,16 +117,44 @@ The core `BAAssistant` class implements a 5-stage reasoning pipeline:
 4. **generate_audit()** - Structured markdown audit report with scores
 5. **generate_close()** - Consultative reflection with soft CTA
 
+### Agent Research System
+The agent mode (`core/agent.py`) implements automated company research:
+
+**ResearchAgent** - Six-step research process:
+1. Website discovery via search
+2. Funding intelligence gathering
+3. Recent news signal hunting
+4. Leadership signal detection
+5. Job posting analysis
+6. Deep website content scraping
+
+**ICPScorer** - Two-pass scoring system:
+1. Hard disqualifiers (immediate rejection criteria)
+2. Positive scoring (HOT/WARM/COLD assessment)
+
+**State Machine** - Streamlit session state management:
+- IDLE → RESEARCHING → ICP_DECISION → RUNNING_PIPELINE → COMPLETE
+- Alternative path: ICP_DECISION → DISQUALIFIED
+
+### Database Architecture
+SQLite database (`DatabaseManager` in `core/database.py`) with three tables:
+- **companies**: Complete analysis storage with extended data
+- **interaction_states**: Agent state persistence (planned)
+- **cache**: Hash-based result caching
+
 ### Key Design Patterns
+- **Modular Architecture**: Clean separation of concerns across core modules
 - **Staged Reasoning**: Each pipeline stage is a separate OpenAI call
-- **Caching**: Results cached by input hash for performance
-- **Retry Handling**: Built-in retry logic for API failures
-- **Modular Design**: Clean separation between pipeline stages
+- **State Machine**: Streamlit session state for agent mode transitions
+- **Triangulation**: Cross-reference company claims vs. external signals
+- **Credit Efficiency**: Firecrawl API usage optimization
+- **Token Management**: tiktoken-based context sieving for TPM limits
 
 ### Environment Variables
 Required in Streamlit secrets or environment:
 ```
 OPENAI_API_KEY=your_openai_api_key
+FIRECRAWL_API_KEY=your_firecrawl_api_key
 ```
 
 ## Key Principles
@@ -117,10 +174,12 @@ OPENAI_API_KEY=your_openai_api_key
 - Never change existing method signatures without flagging it first
 
 ## Architecture rules
-- All classes stay in app.py — no new files unless explicitly asked
+- Core logic organized in modular core/ package (models, pipeline, database, etc.)
+- app.py contains UI logic only (Streamlit interface)
 - No new pip dependencies without asking first
 - Database schema changes must be backward compatible
 - Existing Manual Mode must always remain functional
+- Agent mode enhances but doesn't replace manual functionality
 
 ## Code style
 - All network calls wrapped in try/except with 8 second timeout
@@ -151,10 +210,17 @@ Stability over cleverness. If unsure, ask before refactoring.
   a checkpoint between them
 
 ## Build sequence for this project
-Phase 1 ✅ — Core pipeline (current checkpoint)
-Phase 2 — Playwright removal + Firecrawl scraping
-Phase 3 — Agent mode (single company research)
-Phase 4 — Prospecting agent
+Phase 1 ✅ — Core pipeline (original manual mode)
+Phase 2 ✅ — Playwright removal + Firecrawl scraping integration
+Phase 3 ✅ — Modular architecture extraction (core/ package)
+Phase 4 ✅ — Agent mode (automated single company research)
+Phase 5 — Prospecting agent (bulk research and funnel management)
+
+## Current Status: Phase 4 Complete
+- ✅ Manual mode fully functional with enhanced UI
+- ✅ Agent mode implemented with state machine
+- ✅ Dual mode operation with seamless switching
+- ✅ Modular codebase ready for future enhancements
 
 ## Never combine phases in one prompt
 One phase per Claude Code session.

@@ -166,7 +166,29 @@ Tone: Peer-level technical honesty. No sugar-coating.
 
 Example: "Your AI roadmap assumes clean data flows, but your hiring suggests you're still fighting legacy ETL pipelines. You're building a data cleanup operation, not an AI product."
 
-Direct. Final. Architectural truth."""
+Direct. Final. Architectural truth.""",
+            
+            "verify_acquisition": """You are verifying whether a SPECIFIC company has been acquired. Be conservative — only confirm an acquisition if you find explicit clear evidence about THIS specific company, not any other company with a similar name.
+
+Return JSON only:
+{
+  "acquired": true|false,
+  "acquirer_name": "",
+  "acquisition_year": "",
+  "confidence": "HIGH|MEDIUM|LOW",
+  "evidence": "exact phrase that confirms this"
+}
+
+CRITICAL DISAMBIGUATION RULES:
+- acquired = true ONLY if results explicitly state THIS SPECIFIC COMPANY was purchased/acquired/merged
+- If the acquisition evidence refers to a DIFFERENT company with a similar name, return acquired: false
+- Company description and website must match the acquisition target
+- A 'citation' in text is NOT an acquisition
+- A 'partner' is NOT an acquisition  
+- If unsure about company identity, return acquired: false
+- acquirer_name must be a real company name
+- acquisition_year must be a 4-digit year
+- If either is missing, return acquired: false"""
         }
     
     def _load_prompts(self) -> Dict[str, str]:
