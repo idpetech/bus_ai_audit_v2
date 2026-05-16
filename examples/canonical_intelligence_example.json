@@ -1,0 +1,178 @@
+{
+  "intelligence_id": "intel_a1b2c3d4",
+  "created_at": "2024-05-16T20:00:00Z",
+  "extraction_version": "1.0",
+  "company_profile": {
+    "company_name": "TechFlow Solutions",
+    "website_url": "https://techflow.com",
+    "industry": "Logistics Software",
+    "founded_year": "2019",
+    "technology_stack": {
+      "programming_languages": ["JavaScript", "Python"],
+      "frameworks": ["React", "Django"],
+      "databases": ["PostgreSQL", "Redis"],
+      "infrastructure": ["AWS", "Docker"],
+      "ai_ml_tools": ["OpenAI API"],
+      "data_platforms": [],
+      "evidence_ids": ["ev_12345", "ev_67890"],
+      "confidence": "MEDIUM"
+    },
+    "business_model": {
+      "model_type": "SaaS",
+      "revenue_streams": ["Monthly subscriptions", "Implementation services"],
+      "target_customers": ["Mid-market logistics companies"],
+      "customer_size": "SMB",
+      "transaction_volume_signals": ["Processing 10K shipments/day"],
+      "evidence_ids": ["ev_abc123", "ev_def456"],
+      "confidence": "HIGH"
+    },
+    "operational_signals": {
+      "headcount_estimate": "25-50 employees",
+      "engineering_team_size": "8-12 engineers",
+      "hiring_velocity": ["Hiring 2 senior React developers", "Looking for DevOps engineer"],
+      "development_practices": ["Git workflow", "Code reviews"],
+      "operational_maturity_signals": ["24/7 monitoring", "Automated deployments"],
+      "funding_stage": "Series A",
+      "funding_amount": "$8M",
+      "growth_indicators": ["200% YoY customer growth"],
+      "evidence_ids": ["ev_999888", "ev_777666"],
+      "confidence": "MEDIUM"
+    },
+    "platform_signals": {
+      "architecture_keywords": ["microservices", "event-driven", "REST API"],
+      "system_complexity_indicators": ["Multi-tenant SaaS", "Real-time tracking"],
+      "data_flow_patterns": ["Event streaming", "Batch processing"],
+      "performance_signals": ["99.9% uptime SLA"],
+      "scalability_indicators": ["Auto-scaling groups", "Load balancers"],
+      "api_strategy": ["GraphQL API", "Webhook notifications"],
+      "third_party_integrations": ["Salesforce", "QuickBooks", "FedEx API"],
+      "evidence_ids": ["ev_aaa111", "ev_bbb222"],
+      "confidence": "HIGH"
+    },
+    "decision_makers": [
+      {
+        "name": "Sarah Chen",
+        "title": "CTO",
+        "linkedin": "https://linkedin.com/in/sarahchen",
+        "confidence": "HIGH"
+      }
+    ],
+    "profile_created_at": "2024-05-16T20:00:00Z",
+    "last_updated_at": "2024-05-16T20:00:00Z",
+    "profile_confidence": "MEDIUM",
+    "source_urls": ["https://techflow.com", "https://linkedin.com/company/techflow"]
+  },
+  "evidence_items": [
+    {
+      "evidence_id": "ev_12345",
+      "claim": "Uses React and Django for web application development",
+      "evidence_text": "Our platform is built on React frontend with Django REST API backend",
+      "category": "TECH_STACK",
+      "confidence": "HIGH",
+      "source": "COMPANY_WEBSITE",
+      "source_url": "https://techflow.com/about",
+      "extracted_at": "2024-05-16T19:55:00Z",
+      "surrounding_context": "Technology section describing their stack choices"
+    },
+    {
+      "evidence_id": "ev_67890", 
+      "claim": "Processes 10,000+ shipments daily through platform",
+      "evidence_text": "TechFlow processes over 10,000 shipments daily for our logistics customers",
+      "category": "SCALE_INDICATOR",
+      "confidence": "HIGH",
+      "source": "COMPANY_WEBSITE",
+      "source_url": "https://techflow.com/customers",
+      "extracted_at": "2024-05-16T19:55:30Z",
+      "surrounding_context": "Customer success stories and platform metrics"
+    },
+    {
+      "evidence_id": "ev_abc123",
+      "claim": "Hiring senior React developers with 5+ years experience",
+      "evidence_text": "We are seeking 2 Senior React Developers with 5+ years of experience",
+      "category": "HIRING_PATTERN",
+      "confidence": "HIGH", 
+      "source": "JOB_POSTING",
+      "source_url": null,
+      "extracted_at": "2024-05-16T19:56:00Z",
+      "surrounding_context": "Job requirements section"
+    },
+    {
+      "evidence_id": "ev_def456",
+      "claim": "Claims AI-powered route optimization capabilities",
+      "evidence_text": "Our AI-powered routing engine optimizes delivery routes in real-time",
+      "category": "AI_MENTION",
+      "confidence": "MEDIUM",
+      "source": "COMPANY_WEBSITE", 
+      "source_url": "https://techflow.com/features",
+      "extracted_at": "2024-05-16T19:56:30Z",
+      "surrounding_context": "Product features and capabilities section"
+    },
+    {
+      "evidence_id": "ev_999888",
+      "claim": "No machine learning engineers in team according to LinkedIn",
+      "evidence_text": "LinkedIn shows engineering team of 8 people, all frontend/backend developers, no ML roles",
+      "category": "HIRING_PATTERN",
+      "confidence": "MEDIUM",
+      "source": "EXTERNAL_SEARCH",
+      "source_url": "https://linkedin.com/company/techflow/people",
+      "extracted_at": "2024-05-16T19:57:00Z",
+      "surrounding_context": "LinkedIn company page team analysis"
+    }
+  ],
+  "contradictions": [
+    {
+      "contradiction_id": "contra_001",
+      "claim_evidence_id": "ev_def456",
+      "reality_evidence_id": "ev_999888", 
+      "contradiction_type": "ai_capability_mismatch",
+      "severity": "HIGH",
+      "explanation": "Company claims AI-powered routing but has no ML engineers on team, suggesting AI capabilities may be outsourced or overstated"
+    }
+  ],
+  "modernization_signals": [
+    {
+      "signal_id": "mod_001",
+      "signal_type": "frontend_modernization",
+      "supporting_evidence_ids": ["ev_12345", "ev_abc123"],
+      "modernization_stage": "modern",
+      "technical_debt_indicators": [],
+      "ai_readiness_impact": "Good foundation for AI integration with modern web stack"
+    }
+  ],
+  "ai_readiness_indicators": [
+    {
+      "indicator_id": "ai_001", 
+      "readiness_type": "capability_assessment",
+      "ai_classification": "AI-Assisted",
+      "readiness_score": 4.5,
+      "supporting_evidence_ids": ["ev_def456", "ev_999888"],
+      "blocking_factors": ["No in-house ML expertise", "Likely using third-party AI APIs"],
+      "enablers": ["Modern tech stack", "Good data processing capabilities"]
+    }
+  ],
+  "constraint_indicators": [
+    {
+      "constraint_id": "const_001",
+      "constraint_type": "team_capability",
+      "severity": "MEDIUM", 
+      "breaking_point": "Custom AI development would require significant hiring",
+      "supporting_evidence_ids": ["ev_999888", "ev_abc123"],
+      "failure_mode_prediction": "AI initiatives will be limited to API integration until team scales ML capabilities"
+    }
+  ],
+  "overall_confidence": "MEDIUM",
+  "data_quality_score": 7.5,
+  "evidence_coverage": {
+    "TECH_STACK": 1,
+    "SCALE_INDICATOR": 1, 
+    "HIRING_PATTERN": 2,
+    "AI_MENTION": 1
+  },
+  "source_urls": ["https://techflow.com", "https://linkedin.com/company/techflow"],
+  "extraction_duration_seconds": 45.2,
+  "_serialization": {
+    "version": "1.0",
+    "serialized_at": "2024-05-16T20:00:30Z",
+    "format": "structured_intelligence_v1"
+  }
+}

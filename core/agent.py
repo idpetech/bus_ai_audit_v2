@@ -556,6 +556,12 @@ class ICPScorer:
         if (research.acquisition_status == "ACQUIRED" and 
             research.parent_company and 
             research.acquisition_year):
+            # Generate alternatives even for acquired companies
+            alternatives = self._generate_alternatives(company_name, [
+                f"Acquired by {research.parent_company} in {research.acquisition_year}",
+                "Not an independent decision maker"
+            ])
+            
             return ICPResult(
                 score="COLD",
                 decision="DISQUALIFIED",
@@ -568,7 +574,7 @@ class ICPScorer:
                 ],
                 fit_reasons=[],
                 estimated_credits=0,
-                alternatives=[]
+                alternatives=alternatives
             )
         
         # Check funding stage

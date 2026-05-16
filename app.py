@@ -26,7 +26,11 @@ from core.models import CompanyInputs, PipelineResults, AGENT_STAGES, ResearchSu
 from core.utils import _is_url, sieve_context
 from core.database import DatabaseManager
 from core.scraping import FirecrawlManager, scrape_website, scrape_page
-from core.pipeline import BAAssistant
+# STRUCTURED PIPELINE: "Extract Once, Analyze Many" architecture 
+# Old: from core.pipeline import BAAssistant
+from core.structured_pipeline import StructuredBAAssistant as BAAssistant
+# LEGACY PIPELINE: For A/B comparison testing
+from core.pipeline import BAAssistant as LegacyBAAssistant
 from core.export import PDFGenerator, WordGenerator
 from core.agent import FirecrawlSearchClient, ResearchAgent, ICPScorer, research_to_inputs
 
@@ -495,6 +499,287 @@ def render_agent_panel():
         # Results are displayed in col2 via existing results display logic
 
 
+def load_structured_prompts() -> Dict[str, str]:
+    """Load structured prompts from file"""
+    try:
+        with open("structured_prompts.json", 'r') as f:
+            return json.load(f)
+    except FileNotFoundError:
+        st.error("Structured prompts file not found")
+        return {}
+    except json.JSONDecodeError:
+        st.error("Failed to parse structured prompts file")
+        return {}
+
+
+def render_comparison_results():
+    """Render side-by-side pipeline comparison results"""
+    st.header("⚡ Pipeline Comparison Results")
+    
+    if not getattr(st.session_state, 'comparison_inputs', None):
+        st.error("No comparison inputs available")
+        return
+    
+    inputs = st.session_state.comparison_inputs
+    
+    # Get pipeline configurations
+    pipeline1 = st.session_state.get('pipeline1_select', 'Legacy Pipeline')
+    pipeline2 = st.session_state.get('pipeline2_select', 'Structured Pipeline')
+    prompt_version1 = st.session_state.get('prompts1_select', 'Legacy Prompts')
+    prompt_version2 = st.session_state.get('prompts2_select', 'Structured Prompts')
+    
+    # Load appropriate prompts
+    legacy_prompts = st.session_state.prompts  # Current prompts from custom_prompts.json
+    structured_prompts = load_structured_prompts()
+    
+    # Initialize both assistants
+    openai_api_key = st.secrets.get("OPENAI_API_KEY")
+    if not openai_api_key:
+        st.error("OpenAI API key not found in secrets")
+        return
+    
+    # Run both pipelines
+    col_a, col_b = st.columns(2)
+    
+    with col_a:
+        st.subheader(f"🔧 {pipeline1}")
+        st.caption(f"Using {prompt_version1}")
+        with st.spinner(f"Running {pipeline1.lower()}..."):
+            try:
+                # Select prompts for Pipeline A
+                prompts_a = structured_prompts if prompt_version1 == "Structured Prompts" else legacy_prompts
+                
+                # Select assistant for Pipeline A
+                if pipeline1 == "Legacy Pipeline":
+                    assistant_a = LegacyBAAssistant(openai_api_key, prompts_a)
+                else:
+                    assistant_a = BAAssistant(openai_api_key, prompts_a)
+                
+                results_a = assistant_a.run_full_pipeline(inputs)
+                st.success(f"✅ {pipeline1} completed")
+                
+                # Display results A
+                with st.expander("📋 Signals", expanded=True):
+                    st.json(results_a.signals)
+                
+                with st.expander("🔍 Diagnosis", expanded=False):
+                    st.markdown(results_a.diagnosis)
+                
+                with st.expander("💬 Hook", expanded=False):
+                    st.markdown(results_a.hook)
+                
+            except Exception as e:
+                st.error(f"{pipeline1} failed: {str(e)}")
+                results_a = None
+    
+    with col_b:
+        st.subheader(f"⚡ {pipeline2}")
+        st.caption(f"Using {prompt_version2}")
+        with st.spinner(f"Running {pipeline2.lower()}..."):
+            try:
+                # Select prompts for Pipeline B
+                prompts_b = structured_prompts if prompt_version2 == "Structured Prompts" else legacy_prompts
+                
+                # Select assistant for Pipeline B
+                if pipeline2 == "Legacy Pipeline":
+                    assistant_b = LegacyBAAssistant(openai_api_key, prompts_b)
+                else:
+                    assistant_b = BAAssistant(openai_api_key, prompts_b)
+                
+                results_b = assistant_b.run_full_pipeline(inputs)
+                st.success(f"✅ {pipeline2} completed")
+                
+                # Display results B
+                with st.expander("📋 Signals", expanded=True):
+                    st.json(results_b.signals)
+                
+                with st.expander("🔍 Diagnosis", expanded=False):
+                    st.markdown(results_b.diagnosis)
+                
+                with st.expander("💬 Hook", expanded=False):
+                    st.markdown(results_b.hook)
+                
+            except Exception as e:
+                st.error(f"{pipeline2} failed: {str(e)}")
+                results_b = None
+    
+    # Enhanced quality metrics comparison
+    if results_a and results_b:
+        st.divider()
+        st.subheader("📊 Quality Metrics Comparison")
+        
+        # Basic metrics
+        metrics_col1, metrics_col2, metrics_col3 = st.columns(3)
+        
+        with metrics_col1:
+            st.write("**Content Volume**")
+            st.metric(f"{pipeline1} Signal Count", len(results_a.signals))
+            st.metric(f"{pipeline2} Signal Count", len(results_b.signals))
+        
+        with metrics_col2:
+            st.write("**Analysis Depth**")
+            st.metric(f"{pipeline1} Diagnosis Length", len(results_a.diagnosis.split()))
+            st.metric(f"{pipeline2} Diagnosis Length", len(results_b.diagnosis.split()))
+        
+        with metrics_col3:
+            st.write("**Hook Quality**")
+            st.metric(f"{pipeline1} Hook Length", len(results_a.hook.split()))
+            st.metric(f"{pipeline2} Hook Length", len(results_b.hook.split()))
+        
+        # Advanced metrics
+        st.subheader("📈 Advanced Quality Analysis")
+        
+        advanced_col1, advanced_col2 = st.columns(2)
+        
+        with advanced_col1:
+            st.write("**Pipeline A Analysis**")
+            # Check for evidence references (structured pipeline feature)
+            evidence_refs_a = len([line for line in results_a.diagnosis.split('\n') if 'evidence' in line.lower() and 'id' in line.lower()])
+            st.metric("Evidence References", evidence_refs_a, help="Count of evidence ID references in diagnosis")
+            
+            # Check for contradictions mentioned
+            contradictions_a = len([line for line in results_a.diagnosis.split('\n') if 'contradiction' in line.lower()])
+            st.metric("Contradiction Analysis", contradictions_a, help="Lines mentioning contradictions")
+            
+            # Check for AI classification
+            ai_classification_a = 1 if any(term in results_a.diagnosis.lower() for term in ['ai-washed', 'ai-assisted', 'ai-native', 'non-ai']) else 0
+            st.metric("AI Classification Present", ai_classification_a, help="Whether AI classification is provided")
+        
+        with advanced_col2:
+            st.write("**Pipeline B Analysis**")
+            # Same metrics for Pipeline B
+            evidence_refs_b = len([line for line in results_b.diagnosis.split('\n') if 'evidence' in line.lower() and 'id' in line.lower()])
+            st.metric("Evidence References", evidence_refs_b, help="Count of evidence ID references in diagnosis")
+            
+            contradictions_b = len([line for line in results_b.diagnosis.split('\n') if 'contradiction' in line.lower()])
+            st.metric("Contradiction Analysis", contradictions_b, help="Lines mentioning contradictions")
+            
+            ai_classification_b = 1 if any(term in results_b.diagnosis.lower() for term in ['ai-washed', 'ai-assisted', 'ai-native', 'non-ai']) else 0
+            st.metric("AI Classification Present", ai_classification_b, help="Whether AI classification is provided")
+        
+        # Prompt configuration summary
+        st.subheader("⚙️ Configuration Summary")
+        config_col1, config_col2 = st.columns(2)
+        
+        with config_col1:
+            st.write(f"**{pipeline1}** + **{prompt_version1}**")
+            if prompt_version1 == "Structured Prompts":
+                st.success("✅ Evidence-based prompts designed for structured intelligence")
+            else:
+                st.info("📄 Legacy prompts designed for raw content processing")
+        
+        with config_col2:
+            st.write(f"**{pipeline2}** + **{prompt_version2}**")
+            if prompt_version2 == "Structured Prompts":
+                st.success("✅ Evidence-based prompts designed for structured intelligence") 
+            else:
+                st.info("📄 Legacy prompts designed for raw content processing")
+    
+    # Reset button
+    if st.button("🔄 Reset Comparison"):
+        st.session_state.running_comparison = False
+        st.session_state.comparison_ready = False
+        if hasattr(st.session_state, 'comparison_inputs'):
+            del st.session_state.comparison_inputs
+        st.rerun()
+
+
+def render_comparison_panel():
+    """Render the pipeline comparison panel for A/B testing"""
+    st.subheader("⚡ Pipeline Comparison")
+    st.info("Compare Legacy vs Structured pipeline outputs side by side")
+    
+    # Pipeline and prompt version selection
+    col_pipeline1, col_pipeline2 = st.columns(2)
+    
+    with col_pipeline1:
+        st.write("**Pipeline A Configuration**")
+        pipeline1 = st.selectbox(
+            "Pipeline Type",
+            ["Legacy Pipeline", "Structured Pipeline"],
+            key="pipeline1_select"
+        )
+        prompt_version1 = st.selectbox(
+            "Prompt Version",
+            ["Legacy Prompts", "Structured Prompts"],
+            key="prompts1_select",
+            help="Legacy prompts work with raw content, Structured prompts work with evidence"
+        )
+    
+    with col_pipeline2:
+        st.write("**Pipeline B Configuration**")
+        pipeline2 = st.selectbox(
+            "Pipeline Type", 
+            ["Structured Pipeline", "Legacy Pipeline"],
+            key="pipeline2_select"
+        )
+        prompt_version2 = st.selectbox(
+            "Prompt Version",
+            ["Structured Prompts", "Legacy Prompts"],
+            key="prompts2_select",
+            help="Legacy prompts work with raw content, Structured prompts work with evidence"
+        )
+    
+    # Input source selection
+    st.subheader("Input Source")
+    
+    # Company database browser for comparison
+    with st.expander("📚 Select Company from Database", expanded=True):
+        companies = st.session_state.db_manager.list_companies()
+        if companies:
+            st.write("**Select a company for comparison:**")
+            for url, name, updated in companies[:5]:  # Show latest 5
+                if st.button(f"Compare: {name}", key=f"compare_{hashlib.md5(url.encode()).hexdigest()[:8]}"):
+                    # Load the inputs for comparison
+                    cached_data = st.session_state.db_manager.get_analysis(url)
+                    if cached_data:
+                        st.session_state.comparison_inputs, _, _ = cached_data
+                        st.session_state.comparison_ready = True
+                        st.success(f"Ready to compare pipelines for {name}")
+                        st.rerun()
+        else:
+            st.info("No companies in database yet. Analyze some companies first in Manual or Agent mode.")
+    
+    # Manual input option
+    with st.expander("📝 Or Enter Manual Input", expanded=False):
+        url_input = st.text_input("Company URL", key="comparison_url")
+        job_posting = st.text_area("Job Posting (optional)", key="comparison_job")
+        
+        if st.button("Load for Comparison"):
+            if url_input.strip():
+                if _is_url(url_input.strip()):
+                    # Scrape the website for comparison
+                    with st.spinner("Scraping website for comparison..."):
+                        scraped_content, success = scrape_website(
+                            st.session_state.firecrawl_manager, 
+                            url_input.strip()
+                        )
+                        
+                        if success:
+                            st.session_state.comparison_inputs = CompanyInputs(
+                                target_url=url_input.strip(),
+                                scraped_content=scraped_content,
+                                job_posting=job_posting.strip() if job_posting.strip() else None,
+                                external_signals="",
+                                company_name=""
+                            )
+                            st.session_state.comparison_ready = True
+                            st.success("Ready to compare pipelines")
+                            st.rerun()
+                        else:
+                            st.error("Failed to scrape website")
+                else:
+                    st.error("Please enter a valid URL")
+    
+    # Run comparison button
+    if getattr(st.session_state, 'comparison_ready', False):
+        st.divider()
+        
+        if st.button("🚀 Run Pipeline Comparison", type="primary"):
+            st.session_state.running_comparison = True
+            st.rerun()
+
+
 def main():
     st.set_page_config(
         page_title="IDPETECH · Architectural Reality Check Engine",
@@ -547,15 +832,72 @@ def main():
     with col1:
         st.header("⚗️ Architectural Assessment")
         
+        # Current pipeline status
+        current_pipeline = getattr(st.session_state, 'selected_pipeline', 'Structured Pipeline')
+        current_prompts = getattr(st.session_state, 'selected_prompts', 'Legacy Prompts')
+        if hasattr(st.session_state, 'selected_agent_pipeline'):
+            current_pipeline = st.session_state.selected_agent_pipeline
+            current_prompts = st.session_state.selected_agent_prompts
+        
+        st.caption(f"🔧 Current: {current_pipeline} + {current_prompts}")
+        
         # Mode selector
         mode = st.radio(
             "Mode",
-            ["Manual", "🤖 Agent"],
+            ["Manual", "🤖 Agent", "⚡ Pipeline Comparison"],
             horizontal=True,
             key="mode_selector"
         )
         
         if mode == "Manual":
+            # Pipeline Selection (before manual panel)
+            st.subheader("⚙️ Pipeline Configuration")
+            with st.container():
+                col_pipeline, col_prompts = st.columns(2)
+                
+                with col_pipeline:
+                    pipeline_type = st.selectbox(
+                        "Pipeline Architecture",
+                        ["Structured Pipeline", "Legacy Pipeline"],
+                        key="manual_pipeline_select",
+                        help="Structured = Extract Once, Analyze Many | Legacy = Original pipeline"
+                    )
+                    st.session_state.selected_pipeline = pipeline_type
+                
+                with col_prompts:
+                    prompt_version = st.selectbox(
+                        "Prompt Version", 
+                        ["Legacy Prompts", "Structured Prompts"],
+                        key="manual_prompts_select",
+                        help="Legacy = Raw content prompts | Structured = Evidence-based prompts"
+                    )
+                    st.session_state.selected_prompts = prompt_version
+                
+                # Update assistant based on selection
+                col_update, col_status = st.columns([1, 2])
+                
+                with col_update:
+                    if st.button("🔄 Apply Configuration", key="manual_apply"):
+                        openai_api_key = st.secrets.get("OPENAI_API_KEY")
+                        if openai_api_key:
+                            # Load appropriate prompts
+                            if prompt_version == "Structured Prompts":
+                                prompts = load_structured_prompts()
+                            else:
+                                prompts = st.session_state.prompts
+                            
+                            # Initialize appropriate assistant
+                            if pipeline_type == "Legacy Pipeline":
+                                st.session_state.ba_assistant = LegacyBAAssistant(openai_api_key, prompts)
+                            else:
+                                st.session_state.ba_assistant = BAAssistant(openai_api_key, prompts)
+                            
+                            st.success(f"✅ Switched to {pipeline_type} with {prompt_version}")
+                            st.info(f"**Current Configuration:** {pipeline_type} + {prompt_version}")
+                        else:
+                            st.error("OpenAI API key not found")
+            
+            st.divider()
             render_manual_panel()
             
             # Prompt Management Section (only in manual mode)
@@ -631,43 +973,105 @@ def main():
                 st.info("💡 **Tip:** Edit prompts above, click 'Update Assistant', then 'Save as Defaults' to make your changes permanent for future sessions.")
         
         elif mode == "🤖 Agent":
-            render_agent_panel()
-
-    with col2:
-        st.header("⚗️ Architectural Reality Check Results")
-        
-        if st.session_state.results and st.session_state.inputs:
-            results = st.session_state.results
-            inputs = st.session_state.inputs
-            company_name = inputs.company_name or results.signals.get('company_name', 'Unknown Company')
-            pdf_generator = PDFGenerator()
-            word_generator = WordGenerator()
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M')
-            
-            # Show triangulation summary (expanded by default to show the evidence)
-            with st.expander("🔍 Triangulation Evidence", expanded=True):
-                if inputs.scraped_content:
-                    st.subheader("📄 Company Self-Perception")
-                    st.caption("Extraction Method: Firecrawl API (cloud rendered)")
-                    st.markdown(inputs.scraped_content[:500] + "..." if len(inputs.scraped_content) > 500 else inputs.scraped_content)
+            # Pipeline Selection (before agent panel)
+            st.subheader("⚙️ Pipeline Configuration")
+            with st.container():
+                col_pipeline, col_prompts = st.columns(2)
                 
-                if inputs.job_posting:
-                    st.subheader("💼 Job Posting Signals")
-                    st.info(f"Role: {inputs.job_posting}")
-                    st.caption("Job posting requirements are integrated into the technical analysis")
+                with col_pipeline:
+                    agent_pipeline_type = st.selectbox(
+                        "Pipeline Architecture",
+                        ["Structured Pipeline", "Legacy Pipeline"],
+                        key="agent_pipeline_select",
+                        help="Structured = Extract Once, Analyze Many | Legacy = Original pipeline"
+                    )
+                    st.session_state.selected_agent_pipeline = agent_pipeline_type
                 
-                if inputs.external_signals and "No external signals found" not in inputs.external_signals:
-                    st.subheader("🔍 External Technical Signals")
-                    # Count the number of signal sources
-                    signal_count = len(inputs.external_signals.split("---")) if "---" in inputs.external_signals else 1
-                    st.info(f"Found {signal_count} external signal sources")
-                    # Show all external signals (not truncated)
-                    st.markdown(inputs.external_signals)
-                else:
-                    st.warning("⚠️ No external signals found - analysis based on company narrative only")
+                with col_prompts:
+                    agent_prompt_version = st.selectbox(
+                        "Prompt Version", 
+                        ["Legacy Prompts", "Structured Prompts"],
+                        key="agent_prompts_select", 
+                        help="Legacy = Raw content prompts | Structured = Evidence-based prompts"
+                    )
+                    st.session_state.selected_agent_prompts = agent_prompt_version
+                
+                # Update assistant based on selection
+                if st.button("🔄 Apply Configuration", key="agent_apply"):
+                    openai_api_key = st.secrets.get("OPENAI_API_KEY")
+                    if openai_api_key:
+                        # Load appropriate prompts
+                        if agent_prompt_version == "Structured Prompts":
+                            prompts = load_structured_prompts()
+                        else:
+                            prompts = st.session_state.prompts
+                        
+                        # Initialize appropriate assistant
+                        if agent_pipeline_type == "Legacy Pipeline":
+                            st.session_state.ba_assistant = LegacyBAAssistant(openai_api_key, prompts)
+                        else:
+                            st.session_state.ba_assistant = BAAssistant(openai_api_key, prompts)
+                        
+                        st.success(f"✅ Agent switched to {agent_pipeline_type} with {agent_prompt_version}")
+                        st.info(f"**Agent Configuration:** {agent_pipeline_type} + {agent_prompt_version}")
+                    else:
+                        st.error("OpenAI API key not found")
             
             st.divider()
+            render_agent_panel()
+        
+        elif mode == "⚡ Pipeline Comparison":
+            render_comparison_panel()
+
+    with col2:
+        # Handle comparison mode differently
+        if mode == "⚡ Pipeline Comparison" and getattr(st.session_state, 'running_comparison', False):
+            render_comparison_results()
+        else:
+            st.header("⚗️ Architectural Reality Check Results")
             
+            # Check if results are available and set up variables
+            if hasattr(st.session_state, 'results') and st.session_state.results and hasattr(st.session_state, 'inputs') and st.session_state.inputs:
+                results = st.session_state.results
+                inputs = st.session_state.inputs
+                has_results = True
+            else:
+                results = None
+                inputs = None
+                has_results = False
+            
+            if has_results:
+                company_name = inputs.company_name or results.signals.get('company_name', 'Unknown Company')
+                pdf_generator = PDFGenerator()
+                word_generator = WordGenerator()
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M')
+            
+            # Show triangulation summary (expanded by default to show the evidence) 
+            if has_results:
+                with st.expander("🔍 Triangulation Evidence", expanded=True):
+                    if inputs.scraped_content:
+                        st.subheader("📄 Company Self-Perception")
+                        st.caption("Extraction Method: Firecrawl API (cloud rendered)")
+                        st.markdown(inputs.scraped_content[:500] + "..." if len(inputs.scraped_content) > 500 else inputs.scraped_content)
+                    
+                    if inputs.job_posting:
+                        st.subheader("💼 Job Posting Signals")
+                        st.info(f"Role: {inputs.job_posting}")
+                        st.caption("Job posting requirements are integrated into the technical analysis")
+                
+                    if inputs.external_signals and "No external signals found" not in inputs.external_signals:
+                        st.subheader("🔍 External Technical Signals")
+                        # Count the number of signal sources
+                        signal_count = len(inputs.external_signals.split("---")) if "---" in inputs.external_signals else 1
+                        st.info(f"Found {signal_count} external signal sources")
+                        # Show all external signals (not truncated)
+                        st.markdown(inputs.external_signals)
+                    else:
+                        st.warning("⚠️ No external signals found - analysis based on company narrative only")
+            
+            if has_results:
+                st.divider()
+                
             # Helper function for individual downloads
             def create_download_buttons(section_title: str, content: str, file_prefix: str):
                 col_md, col_pdf, col_word = st.columns(3)
@@ -717,42 +1121,46 @@ Company: {company_name}
                         st.error(f"Word generation failed: {str(e)}")
             
             # Hook Section
-            st.subheader("🎯 First Engagement Hook")
-            st.info(results.hook)
-            create_download_buttons("First Engagement Hook", results.hook, "hook")
-            
-            st.divider()
-            
-            # Diagnostic Section
-            st.subheader("🔍 Diagnostic Insight")
-            st.markdown(results.diagnosis)
-            create_download_buttons("Diagnostic Insight", results.diagnosis, "diagnosis")
-            
-            st.divider()
-            
+            if has_results:
+                st.subheader("🎯 First Engagement Hook")
+                st.info(results.hook)
+                create_download_buttons("First Engagement Hook", results.hook, "hook")
+                st.divider()
+                
+            # Diagnostic Section  
+            if has_results:
+                st.subheader("🔍 Diagnostic Insight")
+                st.markdown(results.diagnosis)
+                create_download_buttons("Diagnostic Insight", results.diagnosis, "diagnosis")
+                
+                st.divider()
+                
             # Audit Section
-            st.subheader("📋 AI Readiness Audit")
-            st.markdown(results.audit)
-            create_download_buttons("AI Readiness Audit", results.audit, "audit")
+            if has_results:
+                st.subheader("📋 AI Readiness Audit")
+                st.markdown(results.audit)
+                create_download_buttons("AI Readiness Audit", results.audit, "audit")
             
-            st.divider()
-            
+                st.divider()
+                
             # Close Section
-            st.subheader("🤝 Conversation Close")
-            st.write(results.close)
-            create_download_buttons("Conversation Close", results.close, "close")
-            
-            st.divider()
-            
+            if has_results:
+                st.subheader("🤝 Conversation Close")
+                st.write(results.close)
+                create_download_buttons("Conversation Close", results.close, "close")
+                
+                st.divider()
+                
             # Complete Report Download Options
-            st.subheader("💾 Complete Report")
-            st.caption("Download all sections as a single file")
-            
-            col_md, col_pdf, col_word = st.columns(3)
-            
-            with col_md:
-                # Complete Markdown download
-                complete_markdown = f"""# AI Readiness Audit Report
+            if has_results:
+                st.subheader("💾 Complete Report")
+                st.caption("Download all sections as a single file")
+                
+                col_md, col_pdf, col_word = st.columns(3)
+                
+                with col_md:
+                    # Complete Markdown download
+                    complete_markdown = f"""# AI Readiness Audit Report
 Generated on: {datetime.now().strftime("%Y-%m-%d %H:%M")}
 Company: {company_name}
 
@@ -775,48 +1183,50 @@ Company: {company_name}
                     mime="text/markdown",
                     key="complete_md"
                 )
+                
+                with col_pdf:
+                    # Complete PDF download
+                    try:
+                        pdf_bytes = pdf_generator.generate_pdf(results, company_name)
+                        st.download_button(
+                            label="📄 Complete Report (PDF)",
+                            data=pdf_bytes,
+                            file_name=f"complete_ai_readiness_report_{timestamp}.pdf",
+                            mime="application/pdf",
+                            key="complete_pdf"
+                        )
+                    except Exception as e:
+                        st.error(f"Complete PDF generation failed: {str(e)}")
+                
+                with col_word:
+                    # Complete Word download
+                    try:
+                        word_bytes = word_generator.generate_word(results, company_name)
+                        st.download_button(
+                            label="📄 Complete Report (DOCX)",
+                            data=word_bytes,
+                            file_name=f"complete_ai_readiness_report_{timestamp}.docx",
+                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                            key="complete_word"
+                        )
+                    except Exception as e:
+                        st.error(f"Complete Word generation failed: {str(e)}")
             
-            with col_pdf:
-                # Complete PDF download
-                try:
-                    pdf_bytes = pdf_generator.generate_pdf(results, company_name)
-                    st.download_button(
-                        label="📄 Complete Report (PDF)",
-                        data=pdf_bytes,
-                        file_name=f"complete_ai_readiness_report_{timestamp}.pdf",
-                        mime="application/pdf",
-                        key="complete_pdf"
-                    )
-                except Exception as e:
-                    st.error(f"Complete PDF generation failed: {str(e)}")
-            
-            with col_word:
-                # Complete Word download
-                try:
-                    word_bytes = word_generator.generate_word(results, company_name)
-                    st.download_button(
-                        label="📄 Complete Report (DOCX)",
-                        data=word_bytes,
-                        file_name=f"complete_ai_readiness_report_{timestamp}.docx",
-                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                        key="complete_word"
-                    )
-                except Exception as e:
-                    st.error(f"Complete Word generation failed: {str(e)}")
-        else:
-            st.info("👈 Enter a target company URL and click 'Start Architecture Analysis' to begin technical assessment.")
-            
-            # Show what the technical assessment will do
-            st.markdown("""
-            **⚗️ The Senior Architect Assessment Engine will:**
-            
-            1. **⚗️ Distill** company self-perception from website (credit-efficient scraping)
-            2. **🔍 Hunt** for external technical contradiction signals (2-query limit)
-            3. **⚖️ Verify** tech-stack contradictions vs. marketing claims
-            4. **🏗️ Generate** brutal technical assessment focusing on architectural failure modes
-            
-            *Results cached for instant retrieval. Zero exposure outreach ready.*
-            """)
+            # Display help message if no results
+            if not has_results:
+                st.info("👈 Enter a target company URL and click 'Start Architecture Analysis' to begin technical assessment.")
+                
+                # Show what the technical assessment will do
+                st.markdown("""
+                **⚗️ The Senior Architect Assessment Engine will:**
+                
+                1. **⚗️ Distill** company self-perception from website (credit-efficient scraping)
+                2. **🔍 Hunt** for external technical contradiction signals (2-query limit)
+                3. **⚖️ Verify** tech-stack contradictions vs. marketing claims
+                4. **🏗️ Generate** brutal technical assessment focusing on architectural failure modes
+                
+                *Results cached for instant retrieval. Zero exposure outreach ready.*
+                """)
 
 if __name__ == "__main__":
     main()
