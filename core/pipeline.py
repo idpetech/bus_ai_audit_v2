@@ -13,6 +13,17 @@ from typing import Dict, Any, Optional, Tuple, TYPE_CHECKING
 
 import openai
 
+# Setup OpenAI response logging
+openai_log_file = os.path.join(os.getcwd(), "openai_responses.log")
+openai_logger = logging.getLogger("openai_responses")
+if not openai_logger.handlers:  # Prevent duplicate handlers
+    openai_handler = logging.FileHandler(openai_log_file)
+    openai_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    openai_handler.setFormatter(openai_formatter)
+    openai_logger.addHandler(openai_handler)
+    openai_logger.setLevel(logging.INFO)
+    openai_logger.propagate = False
+
 if TYPE_CHECKING:
     from .models import CompanyInputs, PipelineResults
     from .scraping import FirecrawlManager
@@ -31,6 +42,17 @@ class BAAssistant:
         self.client = openai.OpenAI(api_key=api_key)
         self.cache = {}
         self.prompts = prompts or self._load_prompts()
+    
+    def _log_openai_interaction(self, stage: str, messages: list, response_content: str, model: str = "unknown"):
+        """Log OpenAI interaction to file."""
+        openai_logger.info("="*80)
+        openai_logger.info(f"STAGE: {stage}")
+        openai_logger.info(f"MODEL: {model}")
+        openai_logger.info(f"SYSTEM PROMPT:\n{messages[0].get('content', 'NO_SYSTEM') if messages else 'NO_MESSAGES'}")
+        openai_logger.info(f"USER PROMPT:\n{messages[1].get('content', 'NO_USER')[:500] + '...' if len(messages) > 1 else 'NO_USER'}")
+        openai_logger.info(f"RESPONSE LENGTH: {len(response_content)} chars")
+        openai_logger.info(f"RAW RESPONSE:\n{response_content}")
+        openai_logger.info("="*80 + "\n")
     
     def _get_default_prompts(self) -> Dict[str, str]:
         """Default system prompts for each stage"""
@@ -242,7 +264,15 @@ CRITICAL DISAMBIGUATION RULES:
                     ],
                     temperature=temp
                 )
-                return response.choices[0].message.content
+                
+                # Log OpenAI interaction to file
+                response_content = response.choices[0].message.content
+                self._log_openai_interaction(stage, [
+                    {"content": system_prompt},
+                    {"content": sieved_prompt}
+                ], response_content, model)
+                
+                return response_content
             except Exception as e:
                 logger.error(f"LLM call attempt {attempt + 1} failed: {e}")
                 if attempt == max_retries - 1:

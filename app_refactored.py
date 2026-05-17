@@ -8,6 +8,7 @@ import json
 import logging
 from datetime import datetime
 from typing import Dict, Any
+import os
 
 # Core business logic imports
 from core.models import CompanyInputs, PipelineResults
@@ -34,6 +35,18 @@ from ui.components.unified_page import (
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Setup OpenAI response logging
+openai_log_file = os.path.join(os.getcwd(), "openai_responses.log")
+openai_logger = logging.getLogger("openai_responses")
+openai_handler = logging.FileHandler(openai_log_file)
+openai_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+openai_handler.setFormatter(openai_formatter)
+openai_logger.addHandler(openai_handler)
+openai_logger.setLevel(logging.INFO)
+openai_logger.propagate = False  # Don't propagate to root logger
+
+print(f"📝 OpenAI responses will be logged to: {openai_log_file}")
 
 
 class RefactoredBAApp:
@@ -76,6 +89,20 @@ class RefactoredBAApp:
                 for key in list(st.session_state.keys()):
                     del st.session_state[key]
                 st.rerun()
+            
+            # Debug: OpenAI Response Viewer
+            st.sidebar.markdown("### 🔬 OpenAI Response Inspector")
+            if st.sidebar.checkbox("📋 Show Raw OpenAI Responses", key="show_raw_responses"):
+                st.session_state.capture_openai_responses = True
+            else:
+                st.session_state.capture_openai_responses = False
+            
+            # Show capture status
+            if hasattr(st.session_state, 'openai_responses'):
+                response_count = len(st.session_state.openai_responses)
+                st.sidebar.info(f"📊 Captured: {response_count} responses")
+            else:
+                st.sidebar.info("📊 No responses captured yet")
     
     def _load_default_prompts(self) -> Dict[str, str]:
         """Load default prompts from existing system."""
@@ -220,6 +247,66 @@ class RefactoredBAApp:
         except Exception as e:
             st.error(f"Failed to update configuration: {e}")
     
+    def render_openai_responses_debug(self):
+        """Show captured OpenAI responses for debugging."""
+        if (st.secrets.get("DEBUG_MODE", "false").lower() == "true" and 
+            getattr(st.session_state, 'capture_openai_responses', False) and
+            hasattr(st.session_state, 'openai_responses')):
+            
+            with st.expander("🔬 Raw OpenAI Responses", expanded=False):
+                for i, (stage, prompt_type, response) in enumerate(st.session_state.openai_responses):
+                    st.markdown(f"### Response {i+1}: {stage} - {prompt_type}")
+                    
+                    # Show response with edit capability
+                    edited_response = st.text_area(
+                        f"Edit response {i+1} (will be used if you click Apply Edits):",
+                        value=response,
+                        height=200,
+                        key=f"edit_response_{i}"
+                    )
+                    
+                    # Store edited version
+                    if f"edited_response_{i}" not in st.session_state:
+                        st.session_state[f"edited_response_{i}"] = response
+                    
+                    st.session_state[f"edited_response_{i}"] = edited_response
+                    
+                    st.markdown("---")
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.button("💾 Apply All Edits & Reprocess"):
+                        st.info("🔄 Reprocessing with edited responses...")
+                        # This would trigger reprocessing with edited responses
+                        # For now, just show the edited versions
+                        st.success("✅ Edits applied! (Reprocessing logic TBD)")
+                
+                with col2:
+                    if st.button("🗑 Clear Response Log"):
+                        if hasattr(st.session_state, 'openai_responses'):
+                            del st.session_state.openai_responses
+                        st.rerun()
+
+    def _patch_openai_for_logging(self):
+        """Simple logging wrapper for OpenAI calls.""" 
+        # For now, just enable detailed logging to capture calls
+        # We'll patch at the individual client level instead of class level
+        if not hasattr(st.session_state, 'openai_logging_enabled'):
+            st.session_state.openai_logging_enabled = True
+            openai_logger.info("OpenAI response logging enabled")
+            logger.info(f"🔬 OpenAI logging enabled - responses will be logged to {openai_log_file}")
+
+    def _log_openai_interaction(self, stage: str, messages: list, response_content: str, model: str = "unknown"):
+        """Log OpenAI interaction to file."""
+        openai_logger.info("="*80)
+        openai_logger.info(f"STAGE: {stage}")
+        openai_logger.info(f"MODEL: {model}")
+        openai_logger.info(f"SYSTEM PROMPT:\n{messages[0].get('content', 'NO_SYSTEM') if messages else 'NO_MESSAGES'}")
+        openai_logger.info(f"USER PROMPT:\n{messages[1].get('content', 'NO_USER')[:500] + '...' if len(messages) > 1 else 'NO_USER'}")
+        openai_logger.info(f"RESPONSE LENGTH: {len(response_content)} chars")
+        openai_logger.info(f"RAW RESPONSE:\n{response_content}")
+        openai_logger.info("="*80 + "\n")
+
     def handle_manual_analysis(self, input_state: Dict[str, Any]):
         """Handle manual URL analysis."""
         try:
@@ -227,6 +314,9 @@ class RefactoredBAApp:
             if not url:
                 st.error("Please enter a valid URL")
                 return
+            
+            # Initialize OpenAI response logging
+            self._patch_openai_for_logging()
             
             # Show progress
             with st.spinner("🔄 Analyzing company..."):
@@ -260,6 +350,8 @@ class RefactoredBAApp:
     
     def handle_agent_research(self, input_state: Dict[str, Any]):
         """Handle agent-based company research."""
+        # Initialize OpenAI response logging
+        self._patch_openai_for_logging()
         try:
             company_name = input_state.get('company_name', '').strip()
             if not company_name:
@@ -514,6 +606,9 @@ class RefactoredBAApp:
                 show_downloads=True,
                 edit_signals_callback=self.handle_signals_edit
             )
+            
+            # Show OpenAI responses debug panel if enabled
+            self.render_openai_responses_debug()
     
     def render_agent_mode(self):
         """Render agent research mode using unified components."""
@@ -556,6 +651,9 @@ class RefactoredBAApp:
                 show_downloads=True,
                 edit_signals_callback=self.handle_signals_edit
             )
+            
+            # Show OpenAI responses debug panel if enabled
+            self.render_openai_responses_debug()
             
             # Reset button to start new research
             if st.button("🔄 Research Another Company", key="new_research"):

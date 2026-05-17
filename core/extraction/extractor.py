@@ -182,6 +182,10 @@ CRITICAL: Do NOT interpret or analyze. ONLY extract explicit factual statements.
             
             logger.debug(f"Raw OpenAI response: {raw_response}")
             
+            # Store raw response for UI review (if enabled)
+            if hasattr(self, '_store_raw_response'):
+                self._store_raw_response(source, raw_response)
+            
             # Clean up response - remove markdown formatting if present
             cleaned_response = raw_response.strip()
             if cleaned_response.startswith('```json'):
