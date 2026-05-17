@@ -161,6 +161,8 @@ CRITICAL: Do NOT interpret or analyze. ONLY extract explicit factual statements.
         user_prompt = f"Extract evidence from this {source.value} content:\n\n{content}"
         
         try:
+            logger.info(f"🔍 Extracting from {source.value}, content length: {len(content)} chars")
+            
             response = self.client.chat.completions.create(
                 model="gpt-4o",
                 messages=[
@@ -170,27 +172,72 @@ CRITICAL: Do NOT interpret or analyze. ONLY extract explicit factual statements.
                 temperature=0.3
             )
             
-            raw_evidence = json.loads(response.choices[0].message.content)
+            logger.info(f"✅ OpenAI API response received for {source.value}")
+            raw_response = response.choices[0].message.content
+            logger.info(f"Raw response length: {len(raw_response) if raw_response else 0} chars")
+            
+            if not raw_response or not raw_response.strip():
+                logger.error(f"❌ Empty response from OpenAI for {source.value}")
+                return []
+            
+            logger.debug(f"Raw OpenAI response: {raw_response}")
+            
+            # Clean up response - remove markdown formatting if present
+            cleaned_response = raw_response.strip()
+            if cleaned_response.startswith('```json'):
+                # Remove markdown code block markers
+                cleaned_response = cleaned_response[7:]  # Remove '```json'
+                if cleaned_response.endswith('```'):
+                    cleaned_response = cleaned_response[:-3]  # Remove '```'
+                cleaned_response = cleaned_response.strip()
+                logger.info(f"✂️ Removed markdown formatting from response")
+            elif cleaned_response.startswith('```'):
+                # Generic code block
+                cleaned_response = cleaned_response[3:]
+                if cleaned_response.endswith('```'):
+                    cleaned_response = cleaned_response[:-3]
+                cleaned_response = cleaned_response.strip()
+                logger.info(f"✂️ Removed generic markdown formatting from response")
+            
+            raw_evidence = json.loads(cleaned_response)
+            logger.info(f"✅ JSON parsed successfully, got {len(raw_evidence)} evidence items")
             
             # Convert to EvidenceItem objects
             evidence_items = []
-            for item in raw_evidence:
-                evidence_item = EvidenceItem(
-                    evidence_id=f"ev_{str(uuid.uuid4())[:8]}",
-                    claim=item["claim"],
-                    evidence_text=item["evidence_text"],
-                    category=EvidenceCategory(item["category"]),
-                    confidence=ConfidenceLevel(item["confidence"]),
-                    source=source,
-                    source_url=source_url,
-                    surrounding_context=item.get("surrounding_context")
-                )
-                evidence_items.append(evidence_item)
+            for i, item in enumerate(raw_evidence):
+                try:
+                    logger.debug(f"Processing evidence item {i+1}: {item.get('claim', 'NO_CLAIM')}")
+                    evidence_item = EvidenceItem(
+                        evidence_id=f"ev_{str(uuid.uuid4())[:8]}",
+                        claim=item["claim"],
+                        evidence_text=item["evidence_text"],
+                        category=EvidenceCategory(item["category"]),
+                        confidence=ConfidenceLevel(item["confidence"]),
+                        source=source,
+                        source_url=source_url,
+                        surrounding_context=item.get("surrounding_context")
+                    )
+                    evidence_items.append(evidence_item)
+                    logger.debug(f"✅ Evidence item {i+1} created successfully")
+                except Exception as item_error:
+                    logger.error(f"❌ Failed to create evidence item {i+1}: {item_error}")
+                    logger.error(f"Item data: {item}")
+                    # Continue processing other items
             
+            logger.info(f"✅ Successfully created {len(evidence_items)} evidence items from {source.value}")
             return evidence_items
             
+        except json.JSONDecodeError as json_error:
+            logger.error(f"❌ JSON parsing failed for {source}: {json_error}")
+            raw_response = response.choices[0].message.content if 'response' in locals() else 'NO_RESPONSE'
+            logger.error(f"Raw response length: {len(raw_response) if raw_response else 0}")
+            logger.error(f"Raw response was: '{raw_response}'")
+            return []
         except Exception as e:
-            logger.error(f"Failed to extract evidence from {source}: {e}")
+            logger.error(f"❌ Failed to extract evidence from {source}: {e}")
+            logger.error(f"Exception type: {type(e).__name__}")
+            import traceback
+            logger.error(f"Full traceback: {traceback.format_exc()}")
             return []
     
     def _build_company_profile(self, evidence: List[EvidenceItem], inputs: CompanyInputs) -> CompanyProfile:
