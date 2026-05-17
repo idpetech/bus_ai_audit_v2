@@ -195,3 +195,26 @@ class StructuredBAAssistant:
         """Legacy compatibility - generate close from signals"""
         logger.warning("Legacy close generation called - limited context available")
         return "Close generation requires structured intelligence context for optimal results."
+    
+    def save_custom_prompts(self, prompts: Dict[str, str]) -> bool:
+        """Save custom prompts as new defaults (legacy compatibility)"""
+        try:
+            import json
+            with open("custom_prompts.json", 'w') as f:
+                json.dump(prompts, f, indent=2)
+            logger.info("Custom prompts saved to custom_prompts.json")
+            return True
+        except Exception as e:
+            logger.error(f"Could not save custom prompts: {e}")
+            return False
+    
+    def reset_to_factory_defaults(self) -> Dict[str, str]:
+        """Reset prompts to factory defaults (legacy compatibility)"""
+        return self._get_default_prompts()
+    
+    def _get_default_prompts(self) -> Dict[str, str]:
+        """Get default prompts (reuse existing logic)"""
+        # Import existing logic from original pipeline
+        from .pipeline import BAAssistant
+        temp_assistant = BAAssistant("dummy")
+        return temp_assistant._get_default_prompts()
